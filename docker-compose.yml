@@ -1,0 +1,114 @@
+# Bulma — SPV Workspace. Starts in the sandbox: fictional data, no email leaves.
+#   0. build:   docker compose build
+#   1. secrets: mkdir -m 700 secrets && docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/secrets:/out" bulma-deal-room:local init-secrets /out
+#   2. settings: printf 'BULMA_UID=%s\nBULMA_GID=%s\nINITIAL_ADMIN_EMAIL=you@deals.example\nINSECURE_COOKIES=1\n' "$(id -u)" "$(id -g)" > .env
+#      (.env is read on every command. The application runs as your user, so it can read the secret files, which only you can read.)
+#   3. start:   docker compose up -d
+# Sign in with that email and the password in secrets/initial_admin_password, at http://127.0.0.1:8080 . For anything but a trial on
+# your own machine, put HTTPS in front, remove INSECURE_COOKIES and set TRUST_PROXY in .env.
+name: bulma
+
+x-app: &app
+  image: bulma-deal-room:${BULMA_VERSION:-local}
+  build: .
+  user: '${BULMA_UID:-10001}:${BULMA_GID:-10001}'
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges]
+  environment: &env
+    DATABASE_HOST: db
+    DATABASE_NAME: bulma
+    BULMA_APP_DB_PASSWORD_FILE: /run/secrets/app_db_password
+  networks: [backend]
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: bulma
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes: [db:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d bulma]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    networks: [backend]
+
+  migrate:
+    <<: *app
+    command: [migrate]
+    environment:
+      <<: *env
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      BULMA_MAINTENANCE_DB_PASSWORD_FILE: /run/secrets/maintenance_db_password
+    secrets: [postgres_password, app_db_password, maintenance_db_password]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: 'no'
+
+  app:
+    <<: *app
+    command: [serve]
+    environment:
+      <<: *env
+      BULMA_MASTER_KEYS_FILE: /run/secrets/master_keys
+      BULMA_HMAC_KEY_FILE: /run/secrets/hmac_key
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD_FILE: /run/secrets/initial_admin_password
+      PAYMENT_INSTRUCTIONS_FILE: ${PAYMENT_INSTRUCTIONS_FILE:-}
+      INSECURE_COOKIES: ${INSECURE_COOKIES:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      STORAGE_DIR: /var/lib/bulma/files
+      SUMSUB_APP_TOKEN_FILE: ${SUMSUB_APP_TOKEN_FILE:-}
+      SUMSUB_SECRET_KEY_FILE: ${SUMSUB_SECRET_KEY_FILE:-}
+      SUMSUB_WEBHOOK_SECRET_FILE: ${SUMSUB_WEBHOOK_SECRET_FILE:-}
+      SUMSUB_LEVEL_NAME: ${SUMSUB_LEVEL_NAME:-}
+      # the real mode's mail (decision R28): JSON {host, port, secure, user?, from}, and the password in its own file
+      SMTP_SETTINGS_FILE: ${SMTP_SETTINGS_FILE:-}
+      SMTP_PASSWORD_FILE: ${SMTP_PASSWORD_FILE:-}
+    volumes: [files:/var/lib/bulma/files]
+    secrets: [app_db_password, master_keys, hmac_key, initial_admin_password]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    ports: ['127.0.0.1:8080:8080']
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/api/health').then((r)=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # deletes personal data when its retention ends (PRD §5.6); the only service allowed to
+  maintenance:
+    <<: *app
+    command: [maintain]
+    environment:
+      <<: *env
+      BULMA_MAINTENANCE_DB_PASSWORD_FILE: /run/secrets/maintenance_db_password
+      BULMA_HMAC_KEY_FILE: /run/secrets/hmac_key
+      STORAGE_DIR: /var/lib/bulma/files
+    volumes: [files:/var/lib/bulma/files]
+    secrets: [maintenance_db_password, hmac_key]
+    depends_on:
+      app: { condition: service_healthy }
+    restart: unless-stopped
+
+secrets:
+  postgres_password: { file: ./secrets/postgres_password }
+  app_db_password: { file: ./secrets/app_db_password }
+  maintenance_db_password: { file: ./secrets/maintenance_db_password }
+  master_keys: { file: ./secrets/master_keys }
+  hmac_key: { file: ./secrets/hmac_key }
+  initial_admin_password: { file: ./secrets/initial_admin_password }
+
+volumes:
+  db:
+  files:
+
+networks:
+  backend:

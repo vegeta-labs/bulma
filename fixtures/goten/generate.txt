@@ -1,0 +1,39 @@
+import { writeFileSync } from 'node:fs'
+import { it, expect } from 'vitest'
+import { rosterExport } from 'BULMA_CHECKOUT/src/lib/statement.ts'
+import { importCommitments, importBank } from 'GOTEN_CHECKOUT/src/lib/csv.ts'
+import { reconcile, decide } from 'GOTEN_CHECKOUT/src/lib/reconcile.ts'
+import { ledgerCsv } from 'GOTEN_CHECKOUT/src/lib/exports.ts'
+const OUT = process.env.OUT!
+it('makes the fixtures', () => {
+  const people = [
+    { participation: 'p-amelia', name: 'Amelia Hart', email: 'amelia@example.com', reference: 'NW-7K2M9Q', dueMinor: 1040000n, scheme: 'seis', terminal: false, refundedMinor: 0n, onHandMinor: 0n },
+    { participation: 'p-ben', name: '=HYPERLINK("x")', email: 'ben@example.com', reference: 'NW-AB3CD4', dueMinor: 500000n, scheme: 'eis', terminal: false, refundedMinor: 0n, onHandMinor: 0n },
+    { participation: 'p-chloe', name: "O'Neil, Chloe", email: 'chloe@example.com', reference: 'NW-QR5ST6', dueMinor: 2000000n, scheme: 'none', terminal: true, refundedMinor: 0n, onHandMinor: 0n },
+    { participation: 'p-dan', name: 'Dan Never', email: 'dan@example.com', reference: null, dueMinor: null, scheme: 'none', terminal: false, refundedMinor: 0n, onHandMinor: 0n },
+  ] as const
+  const roster = rosterExport(people as never, 'GBP', false)
+  writeFileSync(`${OUT}/roster.csv`, roster.csv)
+  const c = importCommitments(roster.csv, 'GBP')
+  if (!c.ok) throw new Error(JSON.stringify(c.errors))
+  expect(c.ignoredColumns).toEqual(['refund_only'])
+  const bank = [
+    'transaction_id,date,amount,payer,reference',
+    'T1,06/10/2026,10400.00,A HART,NW-7K2M9Q',
+    ',2026-10-07,2500.00,B OKAFOR,NW AB3CD4',
+    ',2026-10-07,2500.00,B OKAFOR,NW AB3CD4',
+    'T4,08/10/2026,-45.00,BANK CHARGE,FEE',
+    'T5,2026-10-09,"1,000.00",UNKNOWN,HELLO',
+    'T6,2026-10-09,300.00,=cmd,NW-QR5ST6 refund please',
+  ].join('\r\n')
+  const b = importBank(bank, 'GBP', 'replace', [])
+  if (!b.ok) throw new Error(JSON.stringify(b.errors))
+  const lines = b.value.lines
+  const benLines = lines.filter((l) => l.payer === 'B OKAFOR')
+  const ben = c.rows.find((r) => r.id === 'p-ben')!
+  const decisions = Object.fromEntries(benLines.map((l) => [l.id, decide(l, ben)]))
+  const r = reconcile({ commitments: c.rows, lines, decisions, asOf: '2026-10-31', thresholdDays: 10, withdrawn: { 'p-chloe': '2026-10-08' } })
+  if (!r.ok) throw new Error(JSON.stringify(r))
+  writeFileSync(`${OUT}/ledger.csv`, ledgerCsv(r.result, 'GBP'))
+  writeFileSync(`${OUT}/bank.csv`, bank)
+})

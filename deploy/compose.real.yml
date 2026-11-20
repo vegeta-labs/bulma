@@ -1,0 +1,12 @@
+# Real-mode extras (docs/en/real-mode.md): the payment instructions file and the virus scanner.
+services:
+  app:
+    environment:
+      PAYMENT_INSTRUCTIONS_FILE: /run/bulma/payment-instructions.json
+      CLAMD_HOST: clamav
+    volumes:
+      - ./config/local/payment-instructions.json:/run/bulma/payment-instructions.json:ro
+  clamav:
+    image: clamav/clamav-debian:1.4
+    restart: unless-stopped
+    networks: [backend]

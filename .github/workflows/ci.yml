@@ -1,0 +1,61 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run check:requirements
+      - run: npm run check:licences
+      - run: npm run check:tokens
+      - run: npm run check:outbound
+      - run: npm run check:identity
+      - run: npm run check:routes
+      - name: Released migrations unchanged
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-migrations.mjs "origin/$GITHUB_BASE_REF"
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run oracle:selfcheck
+      - run: npx playwright install --with-deps chromium
+      - name: Tests and due cases
+        run: npm run coverage:check
+      - name: The README steps work on a Linux host
+        run: |
+          docker compose build -q
+          mkdir -m 700 secrets
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/secrets:/out" bulma-deal-room:local init-secrets /out
+          printf 'BULMA_UID=%s\nBULMA_GID=%s\nINITIAL_ADMIN_EMAIL=ci@example.test\nINSECURE_COOKIES=1\n' "$(id -u)" "$(id -g)" > .env
+          docker compose up -d --wait
+          curl -sf http://127.0.0.1:8080/api/health
+          docker compose run --rm -T app audit verify
+          docker compose down -v

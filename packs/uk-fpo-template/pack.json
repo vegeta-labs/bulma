@@ -1,0 +1,435 @@
+{
+  "key": "uk-fpo-template",
+  "version": 2,
+  "regime": "uk-fpo",
+  "author_note": {
+    "as_of": "2026-11-06",
+    "no_lawyer_review": true,
+    "text": "The authors' understanding of the rules as of the date shown. No lawyer has reviewed this pack and it may not apply to your structure. The template name does not mean anything is exempt or compliant.",
+    "known_open_questions": [
+      "Whether the articles relied on cover the beneficial interest offered through a bare trust.",
+      "Whether a cash fee counts as part of what the investor committed.",
+      "How companies and trusts qualify."
+    ]
+  },
+  "steps": [
+    {
+      "kind": "statement",
+      "qualifying": true
+    },
+    {
+      "kind": "assessment",
+      "qualifying": true
+    },
+    {
+      "kind": "warning_block",
+      "qualifying": true
+    },
+    {
+      "kind": "view_deal"
+    },
+    {
+      "kind": "commit"
+    },
+    {
+      "kind": "kyc"
+    },
+    {
+      "kind": "sign"
+    },
+    {
+      "kind": "payment_instructions"
+    }
+  ],
+  "promotion_surfaces": [
+    {
+      "surface": "deal_page",
+      "warning_text_key": "promotion_warning"
+    },
+    {
+      "surface": "memorandum",
+      "warning_text_key": "promotion_warning"
+    },
+    {
+      "surface": "embedded_deck",
+      "warning_text_key": "promotion_warning"
+    },
+    {
+      "surface": "document_download",
+      "warning_text_key": "promotion_warning"
+    },
+    {
+      "surface": "deal_sheet",
+      "warning_text_key": "promotion_warning"
+    },
+    {
+      "surface": "payment_instructions_page",
+      "warning_text_key": "promotion_warning"
+    },
+    {
+      "surface": "payment_instructions_pdf",
+      "warning_text_key": "promotion_warning"
+    },
+    {
+      "surface": "promotional_email",
+      "warning_text_key": "promotion_warning"
+    },
+    {
+      "surface": "investor_preview",
+      "warning_text_key": "promotion_warning"
+    }
+  ],
+  "terminal_can_see_promotion": false,
+  "sender": {
+    "name_text_key": "sender_name"
+  },
+  "thresholds": {
+    "hnw_income_minor": "10000000",
+    "hnw_net_assets_minor": "25000000",
+    "income_rounding_minor": "1000000",
+    "assets_rounding_minor": "10000000",
+    "min_unlisted_investments": 2,
+    "network_months_over": 6,
+    "ubo_over_bps": 2500
+  },
+  "assessment": {
+    "enabled": true,
+    "questions": [
+      {
+        "id": "placeholder-1",
+        "prompt": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. Question 1.",
+        "options": [
+          "Placeholder option A",
+          "Placeholder option B",
+          "Placeholder option C"
+        ],
+        "correct_option": 0,
+        "is_placeholder": true
+      },
+      {
+        "id": "placeholder-2",
+        "prompt": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. Question 2.",
+        "options": [
+          "Placeholder option A",
+          "Placeholder option B",
+          "Placeholder option C"
+        ],
+        "correct_option": 0,
+        "is_placeholder": true
+      },
+      {
+        "id": "placeholder-3",
+        "prompt": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. Question 3.",
+        "options": [
+          "Placeholder option A",
+          "Placeholder option B",
+          "Placeholder option C"
+        ],
+        "correct_option": 0,
+        "is_placeholder": true
+      },
+      {
+        "id": "placeholder-4",
+        "prompt": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. Question 4.",
+        "options": [
+          "Placeholder option A",
+          "Placeholder option B",
+          "Placeholder option C"
+        ],
+        "correct_option": 0,
+        "is_placeholder": true
+      }
+    ],
+    "max_attempts": null
+  },
+  "cooling_off": {
+    "enabled": false,
+    "hours": 0
+  },
+  "incentive_attestation_required": false,
+  "must_reconfirm_extra": [],
+  "policy_defaults": {
+    "per_link_terms": true,
+    "generic_links": true,
+    "bulk_promo": true
+  },
+  "legal_texts": [
+    {
+      "text_key": "risk_summary",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (risk_summary)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "invitee_policy",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (invitee_policy: whom a lead may invite, for example only people the lead knows and expects to receive deals; no bought, scraped or third-party lists; a lawful basis for handling these contacts)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "sender_name",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (sender_name)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "your_money",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (your_money)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "commitment_effect",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (commitment_effect)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "incentive_attestation",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (incentive_attestation)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "statement_high_net_worth",
+      "variant": "default",
+      "version": 1,
+      "format": "bold_markup",
+      "body": "**PLACEHOLDER** PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (statement_high_net_worth)",
+      "required_bold": [
+        "PLACEHOLDER"
+      ],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "statement_sophisticated",
+      "variant": "default",
+      "version": 1,
+      "format": "bold_markup",
+      "body": "**PLACEHOLDER** PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (statement_sophisticated)",
+      "required_bold": [
+        "PLACEHOLDER"
+      ],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "promotion_warning",
+      "variant": "high_net_worth",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (promotion_warning/high_net_worth)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "promotion_warning",
+      "variant": "sophisticated",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (promotion_warning/sophisticated)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "preparation_individual",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (preparation_individual)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "preparation_company",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (preparation_company)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "biometric_consent",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "PLACEHOLDER. NOT LEGAL TEXT. The operator and its lawyers must replace this before the real mode. (biometric_consent)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "not_qualified_notice",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "You cannot continue. (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "assessment_not_passed",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "You did not pass this time. (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "assessment_retake_notice",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "Your assessment result is on your account page. You can sign in to see it. (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "preparation_overview",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "{steps} steps in all. Times are estimates; review usually takes {review_days} days. (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "unsupported_categories",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "This version does not support restricted or certified investors. (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "company_route_note",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "A company or high-value trust has its own route under art 49 of the Financial Promotion Order. This template does not switch it on; ask your lawyers. (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "question_income",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "Income of the amount in the statement, last financial year? (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "question_net_assets",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "Net assets of the amount in the statement? (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "question_private_finance",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "Worked in private equity or small-company finance in the last two years? (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "question_director",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "Director of a company with turnover of at least £1m in the last two years? (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "question_unlisted_investments",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "Invested in unlisted companies in the last two years? (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "question_network",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "Member of an angel network or syndicate? (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "question_company_number",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "Its company number (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "question_still_member",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "I am still a member (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "assessment_unavailable",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "The assessment is not available to you. (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    },
+    {
+      "text_key": "party_guidance",
+      "variant": "default",
+      "version": 1,
+      "format": "plain",
+      "body": "People: directors, anyone with a share over {ubo_percent}% or in control, and whoever acts for it. (Sample wording, not legal text.)",
+      "required_bold": [],
+      "is_placeholder": true
+    }
+  ],
+  "preparation": {
+    "individual_text_key": "preparation_individual",
+    "company_text_key": "preparation_company",
+    "step_minutes": {
+      "statement": 5,
+      "assessment": 10,
+      "kyc": 15,
+      "sign": 5
+    },
+    "review_days": 2
+  },
+  "biometric_consent_text_key": "biometric_consent"
+}

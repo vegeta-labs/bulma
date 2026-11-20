@@ -1,0 +1,4 @@
+investor_id,name,email,reference,cash_due,scheme,refund_only,currency
+p-amelia,Amelia Hart,amelia@example.com,NW-7K2M9Q,10400.00,SEIS,,GBP
+p-ben,"'=HYPERLINK(""x"")",ben@example.com,NW-AB3CD4,5000.00,EIS,,GBP
+p-chloe,"O'Neil, Chloe",chloe@example.com,NW-QR5ST6,20000.00,none,yes,GBP

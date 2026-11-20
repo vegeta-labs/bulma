@@ -1,0 +1,12 @@
+node_modules
+dist
+secrets
+docs
+e2e
+*.json.tmp
+test-report.json
+e2e-report.json
+test-results
+.git
+config/local
+*.dump

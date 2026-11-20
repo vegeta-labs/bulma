@@ -1,0 +1,18 @@
+node_modules/
+dist/
+coverage/
+__pycache__/
+test-report.json
+e2e-report.json
+test-results/
+playwright-report/
+.env
+*.local
+/secrets/
+/config/local/
+test-results-db.txt
+*.dump
+
+# copies made by file sync (e.g. "src/server 2"), never part of the project
+* 2
+* 2.*

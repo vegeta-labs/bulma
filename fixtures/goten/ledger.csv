@@ -1,0 +1,7 @@
+transaction_id,date,amount,payer,reference,status,investor_id,investor_name,decided_by,withdrawn_on,currency
+T1,2026-10-06,10400.00,A HART,NW-7K2M9Q,auto,p-amelia,Amelia Hart,auto,,GBP
+,2026-10-07,2500.00,B OKAFOR,NW AB3CD4,confirmed,p-ben,"'=HYPERLINK(""x"")",person,,GBP
+,2026-10-07,2500.00,B OKAFOR,NW AB3CD4,confirmed,p-ben,"'=HYPERLINK(""x"")",person,,GBP
+T4,2026-10-08,-45.00,BANK CHARGE,FEE,skipped,,,,,GBP
+T5,2026-10-09,1000.00,UNKNOWN,HELLO,unmatched,,,,,GBP
+T6,2026-10-09,300.00,'=cmd,NW-QR5ST6 refund please,auto,p-chloe,"O'Neil, Chloe",auto,2026-10-08,GBP
