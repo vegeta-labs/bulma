@@ -2717,6 +2717,8 @@ describe('D4 mail content (R-NTF-01, R-COM-04, R-COM-06)', () => {
   const DAY = 86_400_000
   const plus = (d: Date, days: number) => new Date(new Date(d).getTime() + days * DAY)
   // the job runs over every deal in this shared database, so the queue is drained to the end, not the usual 200
+  // and the two tests that run it many times take about 12 s on a fast machine: a longer limit than the 20 s default
+  const OVER_THE_WHOLE_DATABASE = 60_000
   const remindAt = async (at: Date) => {
     const o: OutboxDeps = { db: t.app, k: t.keyring, now: () => at, mailer: async () => new FakeOutbox(t.app) }
     await runReminders({ db: t.app, now: () => at, mail: mailQueue(o, () => undefined) })
@@ -2834,7 +2836,7 @@ describe('D4 mail content (R-NTF-01, R-COM-04, R-COM-06)', () => {
     await remindAt(plus(sent, 40))
     expect((await mailsTo(quiet)).filter((m) => m.subject.startsWith('Reminder'))).toHaveLength(0)
     await setReminders(2, 3)
-  })
+  }, OVER_THE_WHOLE_DATABASE)
 
   it('TC-NTF-01 / TC-NTF-02 payment reminders carry the payment deadline, stop once paid, after the deadline and during a pause', async () => {
     const payBy = '2027-06-30'
@@ -2878,7 +2880,7 @@ describe('D4 mail content (R-NTF-01, R-COM-04, R-COM-06)', () => {
     const d = await owingInvestor(open)
     await remindAt(plus(d.issuedAt, 30))
     expect(await paymentMails(d.u.email)).toHaveLength(0)
-  })
+  }, OVER_THE_WHOLE_DATABASE)
 
   it('TC-NTF-01 / TC-CMP-03 payment reminders more often, or back on, is a loosening a second admin approves; less often applies at once', async () => {
     const now = (await inject('GET', '/api/admin/policy', admin)).json()
