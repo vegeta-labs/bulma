@@ -68,7 +68,7 @@ services:
       SUMSUB_SECRET_KEY_FILE: ${SUMSUB_SECRET_KEY_FILE:-}
       SUMSUB_WEBHOOK_SECRET_FILE: ${SUMSUB_WEBHOOK_SECRET_FILE:-}
       SUMSUB_LEVEL_NAME: ${SUMSUB_LEVEL_NAME:-}
-      # the real mode's mail (decision R28): JSON {host, port, secure, user?, from}, and the password in its own file
+      # the real mode's mail: JSON {host, port, secure, user?, from}, and the password in its own file
       SMTP_SETTINGS_FILE: ${SMTP_SETTINGS_FILE:-}
       SMTP_PASSWORD_FILE: ${SMTP_PASSWORD_FILE:-}
     volumes: [files:/var/lib/bulma/files]
@@ -83,7 +83,7 @@ services:
       timeout: 5s
       retries: 12
 
-  # deletes personal data when its retention ends (PRD §5.6); the only service allowed to
+  # deletes personal data when its retention ends; the only service with the maintenance database login, which may delete
   maintenance:
     <<: *app
     command: [maintain]

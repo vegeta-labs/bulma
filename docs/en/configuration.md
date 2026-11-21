@@ -4,7 +4,7 @@ Bulma is configured by environment variables, secret files and a few JSON files.
 
 General rules:
 
-- **Secrets come from files.** A setting ending in `_FILE` holds the path of a file, and the server reads the value from that file. A single trailing line break is ignored. Compose mounts the files in `secrets` under `/run/secrets/`.
+- **Secrets come from files.** A setting ending in `_FILE` holds the path of a file, and the server reads the value from that file. A trailing line break is ignored. Compose mounts the files in `secrets` under `/run/secrets/`.
 - **With Compose, settings go in `.env`.** Compose reads it on every command and passes the settings below to the services. Paths in `.env` for the `_FILE` settings are paths inside the container.
 - **The sandbox ignores the real services.** In the sandbox the server uses fakes for mail, identity checks, signing, file storage and virus scanning, whatever is configured. Settings marked *real mode* below only take effect after the switch, but they are read and checked at every start: an unreadable file or a partial setting stops the start in the sandbox too.
 - **Most wrong or missing settings stop the start**, with a message that names the setting.
@@ -81,7 +81,7 @@ Start from a copy of a shipped `pack.json`. The format is checked by `src/lib/re
 
 ## Commands
 
-The image runs `node src/main.ts` with one of these commands. Compose runs `migrate`, `serve` and `maintain` as services.
+The image runs `node --experimental-strip-types src/main.ts` with one of these commands. Compose runs `migrate`, `serve` and `maintain` as services.
 
 | Command | What it does |
 |---|---|

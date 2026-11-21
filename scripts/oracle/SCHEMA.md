@@ -1,6 +1,8 @@
 # Oracle input and output (D0, D3, D4)
 
-The oracle is an independent Python implementation of money rules. It reads JSON on stdin and writes JSON on stdout. Its author reads `docs/01_PRD.md`, `docs/04_TEST_PLAN.md` and this file only, never any `.ts` or `.js` file under `src/`.
+The oracle is an independent Python implementation of money rules. It reads JSON on stdin and writes JSON on stdout. Its author reads the written requirements, the test plan and this file only, never any `.ts` or `.js` file under `src/`.
+
+The requirements and test plan are kept in the development repository, not in the public one. Rule ids in this file (`C-FEE-1`, `R-CMT-02`, `TC-…`, and Goten's `C-ALL-…`, `C-REC-…`) name rules there; D0, D3 and D4 are the milestones that added each group of operations; a Chinese term in brackets is the requirement's own word for the value.
 
 All amounts are integers in minor units (pence), written as JSON **strings** because they can exceed 2^53. Rates are integers in basis points (1 bp = 0.01%). No floating point anywhere in the oracle.
 

@@ -10,7 +10,7 @@ There is no published image, so you build it from this repository.
 |---|---|
 | Docker with Compose v2 | To run an instance. The image is built on Node.js 22 and the database is PostgreSQL 16. |
 | Node.js 22 or later | Only to develop or run the tests. CI uses Node.js 22. |
-| Python 3 | Only for the oracle checks. |
+| Python 3 | To run the tests: `npm test` includes the oracle checks, which call `python3`. Not needed to run an instance. |
 
 ## Start an instance
 
@@ -62,7 +62,7 @@ npm test
 npm run coverage:check
 ```
 
-`npm test` runs the unit and database tests. `npm run coverage:check` runs them again with the browser tests and checks that every test case due at the current milestone in the test plan ran and passed. The browser tests build the app and start their own server, on a fresh database, on port 4318. Set `E2E_PORT` to use another port. [Verification](verification.md) lists the other checks.
+`npm test` runs the unit and database tests. `npm run coverage:check` runs them again with the browser tests and, in the development repository, checks that every test case due at the current milestone ran and passed (the test plan is not in the public repository, so there it only runs the tests). The browser tests build the app and start their own server, on a fresh database, on port 4318. Set `E2E_PORT` to use another port. [Verification](verification.md) lists the other checks.
 
 ## Build
 

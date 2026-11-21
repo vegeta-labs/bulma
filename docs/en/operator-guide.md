@@ -15,7 +15,7 @@ Read [who does what](responsibilities.md) and the [due-diligence note](due-dilig
 | [Due-diligence note](due-diligence.md) | For anyone deciding whether to rely on this software. |
 | [Release notes](RELEASE_NOTES.md) | What changed in each version, including gates, warnings and calculations. |
 
-A real instance sends mail through your own SMTP server. Until one is set up, registration there is refused: see [sending mail](real-mode.md#sending-mail).
+A real instance sends mail through your own SMTP server. Until one is set up, registration, password resets and other steps that send a link are refused: see [sending mail](real-mode.md#sending-mail).
 
 ## Roles
 
@@ -41,7 +41,7 @@ Admin sections: **Instance mode**, **Changes waiting for an admin**, **Regime pa
 
 **Switches** also holds the number of reminders, **Days between payment reminders (0 for none)**, the **Address for complaints**, the working days to answer a proposed new amount and to reconfirm changed terms, and the note on fees shown when a deal is cancelled. Urgent mails, such as those telling an investor not to pay, have fixed words that nobody can edit.
 
-**How long things are kept** now also covers payments: **Years payment details are kept, counted from each payment (at most 10)**. When that time passes, the payer's details are taken out and the amounts stay. A deal's own records go a set time after the deal ended, unless a hold stops it.
+**How long things are kept** also covers payments: **Years payment details are kept, counted from each payment (at most 10)**. When that time passes, the payer's details are taken out and the amounts stay. A deal's own records go a set time after the deal ended, unless a hold stops it.
 
 ## Operations
 

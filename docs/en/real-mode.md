@@ -16,6 +16,19 @@ Set `PUBLIC_URL` to the address people reach the app on: links in mail are built
 
 For KYC through Sumsub, sign your own contract, mount its secrets (add them under `secrets:` for the `app` service, for instance in `deploy/compose.real.yml`) and set `SUMSUB_APP_TOKEN_FILE`, `SUMSUB_SECRET_KEY_FILE`, `SUMSUB_WEBHOOK_SECRET_FILE` and `SUMSUB_LEVEL_NAME` in `.env`; Compose passes them through. Set all four or none: a partial setting stops the start. Point the webhook at `/api/kyc/webhook/sumsub` with HMAC-SHA256 or SHA-512. A result always goes to a reviewer; it decides nothing by itself. People can always choose the manual route, without a face scan. The person continues on Sumsub's own page through a link, which also opens on a phone. When a person's data reaches the end of retention, the job removes it here; removing the applicant at Sumsub is yours, under your contract, and the audit log records the applicant id to follow up.
 
+A secret needs two entries in `deploy/compose.real.yml`: one under the `app` service and one at the top level that names its file. For example, for the Sumsub token:
+
+```yaml
+services:
+  app:
+    secrets: [sumsub_app_token]
+secrets:
+  sumsub_app_token:
+    file: ./secrets/sumsub_app_token
+```
+
+The file is then at `/run/secrets/sumsub_app_token` inside the container, so `.env` has `SUMSUB_APP_TOKEN_FILE=/run/secrets/sumsub_app_token`. Do the same for each secret file. Paths are relative to the project folder, as for the other files in `deploy/compose.real.yml`; Compose merges these lists with the ones in `docker-compose.yml`.
+
 ## Sending mail
 
 Mail goes through an SMTP server you choose. Put the settings in a JSON file and the password in a file of its own, mount both as secrets like the KYC ones, and set `SMTP_SETTINGS_FILE` and `SMTP_PASSWORD_FILE` in `.env`.

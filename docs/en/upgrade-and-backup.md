@@ -30,7 +30,7 @@ docker compose stop app maintenance
 docker compose exec -T db dropdb -U postgres --force bulma
 docker compose exec -T db createdb -U postgres bulma
 docker compose exec -T db pg_restore -U postgres --exit-on-error -d bulma < ~/bulma-backups/bulma-YYYY-MM-DD.dump
-docker run --rm -e OWNER="$(id -u):$(id -g)" -v <project>_files:/data -v ~/bulma-backups:/backup alpine sh -c 'find /data -mindepth 1 -delete && tar xzf /backup/files-YYYY-MM-DD.tgz -C /data && chown -R "$OWNER" /data'
+docker run --rm -e OWNER="$(id -u):$(id -g)" -v bulma_files:/data -v ~/bulma-backups:/backup alpine sh -c 'find /data -mindepth 1 -delete && tar xzf /backup/files-YYYY-MM-DD.tgz -C /data && chown -R "$OWNER" /data'
 git checkout <earlier tag>
 docker compose build && docker compose up -d
 ```
@@ -47,7 +47,7 @@ A dump holds the grants but not the database roles they name, so create the role
 docker compose up -d db
 docker compose run --rm -T migrate migrate --roles-only
 docker compose exec -T db pg_restore -U postgres --exit-on-error -d bulma < ~/bulma-backups/bulma-YYYY-MM-DD.dump
-docker run --rm -e OWNER="$(id -u):$(id -g)" -v <project>_files:/data -v ~/bulma-backups:/backup alpine sh -c 'tar xzf /backup/files-YYYY-MM-DD.tgz -C /data && chown -R "$OWNER" /data'
+docker run --rm -e OWNER="$(id -u):$(id -g)" -v bulma_files:/data -v ~/bulma-backups:/backup alpine sh -c 'tar xzf /backup/files-YYYY-MM-DD.tgz -C /data && chown -R "$OWNER" /data'
 docker compose up -d
 docker compose run --rm -T app audit verify
 ```
@@ -59,10 +59,10 @@ Identity documents are in the `files` volume, not the database, so a backup is b
 ```
 docker compose stop maintenance
 docker compose exec -T db pg_dump -U postgres -Fc bulma > ~/bulma-backups/bulma-YYYY-MM-DD.dump
-docker run --rm -v <project>_files:/data -v ~/bulma-backups:/backup alpine tar czf /backup/files-YYYY-MM-DD.tgz -C /data .
+docker run --rm -v bulma_files:/data -v ~/bulma-backups:/backup alpine tar czf /backup/files-YYYY-MM-DD.tgz -C /data .
 docker compose start maintenance
 ```
 
-`<project>` is the Compose project name, usually the folder's name. The files are encrypted, so they need the same keys.
+The volume is `bulma_files` because the compose file names the project `bulma`, whatever the folder is called. If you start it under another project name (`-p` or `COMPOSE_PROJECT_NAME`), use that name instead of `bulma`; `docker volume ls` shows it. The files are encrypted, so they need the same keys.
 
 The master keys and HMAC key in `secrets` are needed to verify the log and read encrypted data, so a backup without them is not a full backup. Test this before you need it, on a separate machine.

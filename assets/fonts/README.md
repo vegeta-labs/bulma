@@ -1,4 +1,4 @@
-# Fonts for generated PDFs (decision R27)
+# Fonts for generated PDFs
 
 Both fonts are licensed under the SIL Open Font License 1.1; the licence texts are next to them, unchanged.
 Each generated PDF embeds only the characters it draws, cut from these files at weight 400 or 700.

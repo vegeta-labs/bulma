@@ -18,7 +18,7 @@ The tests connect to `postgres://postgres:postgres@localhost:55433/postgres` unl
 
 ## Test names
 
-Every test name starts with the ID of the test-plan case it covers, such as `TC-AUTHZ-07` or `E2E-01`. The test plan is kept with the source; each case row ends with the milestone it is due at.
+Every test name starts with the ID of the test-plan case it covers, such as `TC-AUTHZ-07` or `E2E-01`. The test plan, the written requirements and the list of names that must not be published are kept in the development repository, not in this public one; each test-plan case ends with the milestone it is due at. In the public repository the three checks that read them, `check:requirements`, `check:identity` and the due-case step of `coverage:check`, print "skipped" and pass. Every test still runs except one, which needs the private list and is skipped.
 
 ## Quick checks
 
@@ -49,11 +49,11 @@ Runs Playwright in Chromium. It first makes a production build, then starts a re
 npm run coverage:check
 ```
 
-Runs the unit tests and the browser tests, then `scripts/check-coverage.mjs`, which reads both JSON reports. It fails unless every case due at the current milestone ran and passed. It reads the test results, not the source, so a test that exists but did not run does not count.
+Runs the unit tests and the browser tests, then `scripts/check-coverage.mjs`, which reads both JSON reports. In the development repository it fails unless every case due at the current milestone ran and passed; in the public repository it runs the tests (one is skipped, as above) and skips the due-case step. It reads the test results, not the source, so a test that exists but did not run does not count.
 
 ## The independent oracle
 
-`scripts/oracle/` is a separate implementation of the money rules in Python, using only the standard library and exact arithmetic (integers and fractions, no floating point). It is written from the written rules alone (the PRD, the test plan and `scripts/oracle/SCHEMA.md`), never from the TypeScript, and it shares no code with it. Its input and output format is in `SCHEMA.md`.
+`scripts/oracle/` is a separate implementation of the money rules in Python, using only the standard library and exact arithmetic (integers and fractions, no floating point). It is written from the written rules alone (the requirements and test plan kept in the development repository, and `scripts/oracle/SCHEMA.md`), never from the TypeScript, and it shares no code with it. Its input and output format is in `SCHEMA.md`.
 
 ```bash
 npm run oracle:selfcheck
@@ -97,10 +97,10 @@ Options:
 | `npm run check:routes` | Builds the server without a database and lists every route with its gate. Fails if a route names no gate or is public without being on the public list. |
 | `npm run check:outbound` | No telemetry and no request to the project: searches the source in `src/` for known network calls and outside host names; only the adapter files and the browser's API client may make such calls, no source file may name an outside host except the KYC adapter's, and no known analytics package is a dependency. It does not inspect the code of dependencies. |
 | `npm run check:migrations` | Migration files that exist on the base commit have not been changed or removed. Takes the base as an argument; without one it compares with the previous commit. |
-| `npm run check:requirements` | Every requirement in the PRD appears in the test plan. |
+| `npm run check:requirements` | Every requirement appears in the test plan. Development repository only; skipped in the public one. |
 | `npm run check:licences` | Every dependency has an allowed licence, or a listed exception with its reason. |
 | `npm run check:tokens` | `src/web/tokens.css` still matches the design tokens shared with the other Vegeta tools (by SHA-256). |
-| `npm run check:identity` | Files that would be published name nothing that must not be published. |
+| `npm run check:identity` | Every file that is published names nothing that must not be published. Development repository only (the list of names is private); skipped in the public one. |
 
 ## Continuous integration
 

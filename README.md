@@ -23,6 +23,8 @@ Compose reads `.env` every time, so every later command runs with the same setti
 
 ## Develop
 
+Needs Docker, Node.js 22 or later and Python 3 (the tests run the Python oracle).
+
 ```
 docker run -d --name bulma-pg -e POSTGRES_PASSWORD=postgres -p 55433:5432 postgres:16
 npm ci

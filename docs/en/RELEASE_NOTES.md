@@ -11,11 +11,11 @@ Also in this version:
 - The lead's panel: who is waiting on whom, figures, filters, a CSV of the list, a preview of the deal as an investor sees it, and messages to investors that an approver passes first.
 - Changes to a live deal: a reviewer decides whether investors are only told or must reconfirm, and investors reconfirm on screen.
 - When a deal is full: a proposed new amount that the investor answers on one screen, or a waiting list.
-- Removing or withdrawing an investor, and cancelling a deal, each confirmed by a second person.
+- Removing an investor from whom no money has arrived; recording a withdrawal, with written consent whose evidence a reviewer accepts before the withdrawal takes effect and its refund is listed; cancelling a deal, confirmed by a second person.
 - For the operator: one to-do list across deals, complaints, an evidence pack per investor (PDF and JSON), and time limits on how long records are kept.
 - A roster for Goten and a read-back of Goten's reconciliation ledger, which a person confirms row by row.
 
-Not in this version: closing. A lead can ask to close, but nothing takes the deal on to completion. Only reconciliation is handed to Goten: the roster and the ledger. Closing and allocation are not, so a deal whose investors pay fees in more than one way cannot yet hand its closing to Goten. Bulma's matching is its own code, not Goten's; the differences are listed in the [Operator guide](operator-guide.md).
+Not in this version: closing. A lead can ask to close, but nothing takes the deal on to completion, and no deal's closing or allocation is handed to Goten yet. Only reconciliation is handed over: the roster goes to Goten and Goten's ledger is read back. Bulma's matching is its own code, not Goten's; the differences are listed in the [Operator guide](operator-guide.md).
 
 ### Gates
 First version: who can see or do what is described in the [Lead guide](use/lead-guide.md), the [Investor guide](use/investor-guide.md) and the [Operator guide](operator-guide.md).
@@ -24,12 +24,14 @@ First version: who can see or do what is described in the [Lead guide](use/lead-
 First version: warning texts come from the operator's regime pack. The packs shipped with the software hold placeholder text, and the real mode refuses placeholders.
 
 ### Calculations
-First version: amounts are integer minor units and rates are basis points. Only the amount to pay is exact; investment amounts and fees are labelled estimates until the calculation engine change.
+First version: amounts are integer minor units and rates are basis points. Only the amount to pay is exact; investment amounts and fees are shown as estimates, because they are settled at closing, which this version does not do.
 
 ### Other changes
 Checked on the release branch on 2026-11-20, run locally:
 - Unit and real-database tests: 1,130 of 1,130 pass.
 - Browser tests: 40 of 40 pass.
-- Test-plan cases due by D4: 185 of 185 have a passing test.
+- Test-plan cases due by this version: 185 of 185 have a passing test.
 - Deliberate code breakages (full mutation run): 1,477 of 1,477 caught.
 - Python oracle, written separately from the code: 35,084 of 35,084 random and boundary cases match.
+
+The published version adds two tests for the check that keeps private files out of the public repository, and gives two slow reminder tests a longer time limit. In the public repository's CI on 2026-11-20, 1,131 of its 1,132 unit and real-database tests passed and one was skipped (it needs the private list, which only the development repository has), and the 40 browser tests passed.

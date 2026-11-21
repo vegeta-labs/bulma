@@ -1,6 +1,6 @@
 # Architecture
 
-Bulma is one Node.js and TypeScript application: a Fastify server with a Postgres database, and a React interface built with Vite and served by the same process. This page describes how the code is laid out, how a request is handled and where the business rules live.
+Bulma is one Node.js and TypeScript application: a Fastify server with a PostgreSQL database, and a React interface built with Vite and served by the same process. This page describes how the code is laid out, how a request is handled and where the business rules live.
 
 To run an instance, see [Run and deploy](run-and-deploy.md). For what protects the data, see the [security model](security-model.md).
 
@@ -38,7 +38,7 @@ deploy/           Compose additions for the real mode
 ## Request flow
 
 1. The browser calls `/api/...` through `src/web/api.ts`, which sends the CSRF token on every request that is not a `GET`.
-2. `buildServer` in `src/server/app.ts` refuses a body that is nested too deeply or holds characters Postgres cannot store.
+2. `buildServer` in `src/server/app.ts` refuses a body that is nested too deeply or holds characters PostgreSQL cannot store.
 3. The route's gate is read. A `public` route goes straight to its handler. Any other route needs a live session, a valid CSRF token for writes, and a gate that says yes; otherwise the answer is 401 or 403.
 4. The handler reads what it needs, calls pure functions in `src/lib/` to decide, and writes the result and its audit entry in one database transaction.
 5. Every response gets the security headers, including the content security policy.
@@ -80,7 +80,7 @@ Bulma records money; it never moves it. Receipts and refunds are rows, and each 
 
 ## Database and migrations
 
-Postgres 16. Migrations are plain SQL files in `src/store/migrations/`, numbered and applied in order by `src/store/migrate.ts` under an advisory lock. Each applied file's SHA-256 is stored, and the migration stops if a file already applied has changed. A schema change is always a new file; `npm run check:migrations` fails if a file on the base branch was changed or removed.
+PostgreSQL 16. Migrations are plain SQL files in `src/store/migrations/`, numbered and applied in order by `src/store/migrate.ts` under an advisory lock. Each applied file's SHA-256 is stored, and the migration stops if a file already applied has changed. A schema change is always a new file; `npm run check:migrations` fails if a file on the base branch was changed or removed.
 
 The migration creates two login roles besides the owner:
 

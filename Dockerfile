@@ -1,4 +1,4 @@
-# One image for `migrate` and `serve` (tech design T12). Non-root, read-only root file system at run time (compose).
+# One image for every command (`migrate`, `serve`, `maintain`, `audit`, `init-secrets`). Non-root, read-only root file system at run time (compose).
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
