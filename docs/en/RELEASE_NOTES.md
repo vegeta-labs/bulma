@@ -2,7 +2,7 @@
 
 Only what is built, tested and in the tagged version is listed. Format: [release notes template](release-notes-template.md).
 
-## v0.1.0 (2026-11-24): Run an SPV deal from set-up to money received, refunds and a request to close, in a sandbox by default
+## v0.1.0 (2026-11-21): Run an SPV deal from set-up to money received, refunds and a request to close, in a sandbox by default
 
 The first version. A new instance starts as a sandbox with fictional data, and no email leaves it. A lead sets up a deal and a syndicate; the company sends its documents through a link without an account; a reviewer approves the deal and the lead takes it live. Investors are invited by link or email, confirm eligibility, commit, pass an identity check decided by a person at the operator, sign the deal sheet and get payment instructions. A reviewer or admin records the money that arrives, by hand or from a bank statement, and handles money nobody could be matched to, refunds and money held after a refused identity check. The software never moves money.
 
