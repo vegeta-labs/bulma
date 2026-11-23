@@ -54,7 +54,7 @@ Admin sections: **Instance mode**, **Changes waiting for an admin**, **Regime pa
 On a deal:
 
 - **Decisions** (reviewer): a request to cancel (**Confirm the cancellation** or **Decline** with a note; whoever asked cannot decide), withdrawals the lead recorded (**Accept the withdrawal** or **Decline**), and people who did not reconfirm in time (**Exclude them and refund**, with how they were told). **Take back the request to close** and **Archive the deal** (once a cancelled deal has no refund left and no money held) are here too, and **Ask to cancel this deal**, which another reviewer confirms.
-- **Changes to review** (reviewer): a lead's change to a live deal. Decide whether investors are only told or must reconfirm, or **Return it to the lead**. An approver then approves it.
+- **Changes to review** (reviewer): a lead's change to a live deal. Changes to what investors get, such as a higher price, the carry or the fees, are always reconfirmed; for other changes, decide whether investors are only told or must reconfirm. Or **Return it to the lead**. Where content approval is asked for (always on a real instance, in the sandbox if an admin turned it on), an approver then approves it. A change to one person's terms takes effect on your decision.
 - **Evidence pack** (reviewer or admin): for each investor, a PDF to read and a JSON list to check, with everything the site recorded for that person and deal, and their statements, warnings, assessment and identity checks. Each export is in the audit log. Someone with a stake in the deal cannot export it.
 - **Goten roster and ledger**: **Make the roster for Goten** gives a CSV to copy into Goten. **Read back a Goten ledger** checks Goten's ledger against what is recorded; you decide each row.
 

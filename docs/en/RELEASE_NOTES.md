@@ -9,7 +9,7 @@ The first version. A new instance starts as a sandbox with fictional data, and n
 Also in this version:
 - Email from a real instance through the operator's SMTP server, with a queue that retries; reminders to commit, to pay and to reconfirm.
 - The lead's panel: who is waiting on whom, figures, filters, a CSV of the list, a preview of the deal as an investor sees it, and messages to investors that an approver passes first.
-- Changes to a live deal: a reviewer decides whether investors are only told or must reconfirm, and investors reconfirm on screen.
+- Changes to a live deal: changes to what investors get are always reconfirmed; for other changes a reviewer decides whether investors are only told or must reconfirm. Investors reconfirm on screen.
 - When a deal is full: a proposed new amount that the investor answers on one screen, or a waiting list.
 - Removing an investor from whom no money has arrived; recording a withdrawal, with written consent whose evidence a reviewer accepts before the withdrawal takes effect and its refund is listed; cancelling a deal, confirmed by a second person.
 - For the operator: one to-do list across deals, complaints, an evidence pack per investor (PDF and JSON), and time limits on how long records are kept.
