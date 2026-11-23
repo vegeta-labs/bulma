@@ -23,7 +23,7 @@ There are three staff roles: **admin**, **reviewer** and **approver**. Admins gi
 
 ## Review work in the app
 
-Your work appears as sections on **Home**, plus **Deal review**, **Content approval** and **Operations** in the menu.
+Your work appears as sections on **Home**, plus **Deal review**, **Content approval** and **Operations** in the menu. An approver's queues are on **Content approval**, except the deal sheet wording, which is on **Home**.
 
 - **Deal review** (reviewer): read the deal and decide **Approve**, **Ask for changes** or **Refuse**. Refusing is final. Also pass or send back the **Company check**.
 - **Content approval** (approver): **Record the approval** of the reviewed version. It is needed before a deal on a real instance goes live, and in the sandbox if an admin turned that on in **Deal settings**. It is your internal record, not the statutory approval of a financial promotion.
@@ -31,11 +31,11 @@ Your work appears as sections on **Home**, plus **Deal review**, **Content appro
 - **Bank accounts waiting** and **Statements that did not qualify** (reviewer).
 - **Link terms waiting for you** (reviewer): approve link terms that differ from the default, where your pack asks for it.
 - **Money received** (reviewer or admin, from **Live deals**): record each payment that reached your account, as the bank shows it. A reversal keeps the record. Leads cannot record money.
-- **Deal sheet wording, version** N (approver): approve the admin's new deal sheet text with **Approve this wording**.
+- **Deal sheet wording, version** N (approver, on **Home**): approve the admin's new deal sheet text with **Approve this wording**.
 - **Pause** (reviewer): stop one deal, one lead's deals, or everything, at once. Someone else must end it.
-- **Changes to live deals waiting for approval** (approver): **Approve the change** after a reviewer has passed it.
-- **Messages waiting for approval** (approver): a lead's message to investors; **Approve this message** with your name as you state it.
-- **Mail wording waiting for approval** (approver): an admin's new wording for mail to investors.
+- **Changes to live deals waiting for approval** (approver, on **Content approval**): **Approve the change** after a reviewer has passed it.
+- **Messages waiting for approval** (approver, on **Content approval**): a lead's message to investors; **Approve this message** with your name as you state it.
+- **Mail wording waiting for approval** (approver, on **Content approval**): an admin's new wording for mail to investors.
 
 Admin sections: **Instance mode**, **Changes waiting for an admin**, **Regime packs**, **Platform fee**, **Deal settings**, **Switches**, **Deal sheet**, **Mail to investors**, **Receiving accounts**, **Audit log**, **How long things are kept** and, in the sandbox, **Sandbox outbox**.
 
@@ -78,12 +78,13 @@ Bulma's matching is its own code, not Goten's. Only the roster and the reconcili
 - **`refund_only`.** The roster marks everyone in a final state, not only those who withdrew, so their money is matched and not chased. Goten does not read this column; check those rows yourself.
 - **The same statement twice.** Bulma recognises lines it already has, even without a transaction ID. Goten lists such lines as possible duplicates.
 - **Nothing is recorded by itself.** Bulma records a statement line only after you decide it.
-- **References only.** Bulma matches by exact reference and does not suggest near matches; anything else goes to **Money not yet assigned**. The amount does not take part in the match: a line for a different amount is still matched to that person.
+- **References only.** Bulma matches by exact reference and does not suggest near matches; anything else goes to **Money not yet assigned**.
+- **Amounts.** The amount does not take part in the match: a line for a different amount is still matched to that person.
 - **Currency.** It comes from the receiving account you choose. A line in another currency goes to **Money not yet assigned**.
 - **One statement for every deal.** References are unique across the instance.
 - **Lines after the cut-off date.** Goten leaves lines dated after its cut-off out of that reconciliation. Bulma has no cut-off and still matches them, so the money received for a person can differ.
 - **Dates before 2000.** Bulma refuses the whole statement. Goten accepts such lines.
-- **Late money.** Money that arrives after a deal is settled is marked as late and listed for refund. Goten has nothing like this.
+- **Late money.** Money that arrives after a deal is settled is marked as late and listed for refund. No deal reaches settled in this version: the steps after **Ask to close** are not built yet. Goten has nothing like this.
 - **Money already recorded.** When a statement line has the same person and amount as money you already recorded, Bulma asks whether it is the same transfer, so it is counted once. Goten has nothing like this.
 
 ## Not built yet

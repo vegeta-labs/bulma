@@ -52,7 +52,7 @@ Open **Deals** and click **Start a deal**. Each section is saved as you type, an
 | **Company** | **Legal name**: Seedling Ltd. **Contact name**, **Contact email** and **Jurisdiction**: anything fictional. |
 | **Terms** | **Currency**: **GBP**. **Instrument**: **Equity**. **Share price**: 0.015. **Pre-money valuation**: 5,000,000. **SPV allocation**: 300,000. **Default voter**: **The lead**. |
 | **Files** | Under **Investment agreement and legal documents**, use **Add files** to add your PDF. |
-| **Economics** | **Default carry (%)**: 20. Click **Add a recipient**, choose **A person**, fill in **First name**, **Last name** and **Email**, and set **Share of the carry (%)** to 100. **Who pays the platform fee**: **The investors, in proportion**. |
+| **Economics** | **Default carry (%)**: 20. Click **Add a recipient**, set **Type** to **A person**, fill in **First name**, **Last name** and **Email**, and set **Share of the carry (%)** to 100. **Who pays the platform fee**: **The investors, in proportion**. |
 | **Review** | Under **Before you submit**, tick the box about board and shareholder approval. |
 
 Still in **Review**, click **Submit for review**. The deal's status is now **With the reviewer**. Click **Sign out**.

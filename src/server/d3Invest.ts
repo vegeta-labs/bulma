@@ -674,7 +674,7 @@ export function registerD3Invest(app: FastifyInstance, d: D3Deps) {
         ...(await sharedContent(c, deal.id, snap.snapshot)),
         key_terms: keyTerms(snap.snapshot, terms, cfg, currency),
         commitment_effect: textOf(pack, 'commitment_effect'),
-        estimate_note: 'Until the calculation engine change is done, fees and investment amounts here are estimates. Only the amount to pay is exact.',
+        estimate_note: 'In this version, fees and investment amounts here are estimates. Only the amount to pay is exact.',
         can_commit: promo && deal.state === 'live',
         // R-ALO-04: no participation, no amount to pay; only what the person asked for and whether they were let in
         waitlist: inv

@@ -387,7 +387,7 @@ export function PolicySection() {
         <input type="number" min={0} max={30} value={v.reminder_every_days} onChange={(e) => setF({ ...v, reminder_every_days: Number(e.target.value) })} />
       </label>
       <label>
-        Address for complaints (shown with the complaint form; R-AUD-05)
+        Address for complaints (shown with the complaint form)
         <input type="email" maxLength={320} value={v.complaints_email ?? ''} onChange={(e) => setF({ ...v, complaints_email: e.target.value })} />
       </label>
       <label>

@@ -52,7 +52,7 @@ All of this is on the deal's **Investors** card. You can build the expected list
 
 **Whom you may invite.** If the operator has written whom leads may invite, read it, tick **I have read this text (version** N**) and will invite only the people it allows** and click **Confirm**. Until you do, you cannot add people to the list or send an invitation. When the operator changes the text, you confirm again.
 
-**Links.** Going live makes a default link with the deal's carry and no fee, and, where the operator allows links with their own terms, a second one with no carry and no fee. If the operator allows only invitations to a named address, these links carry terms for your email invitations and cannot be opened by anyone. **New terms** makes a link with its own carry and cash fee, if the operator allows it; say why they differ and confirm they are not an incentive. Terms cannot be changed once saved, and some need a reviewer's approval before the link works. **Show link** shows a link anyone can open, for you to copy by hand. **Turn off** stops it: people bound to it who have not committed lose the invitation. Links do not expire and have no use limit; a deal can have up to 500 in use.
+**Links.** Going live makes a default link with the deal's carry and no fee, and, where the operator allows links with their own terms, a second one with no carry and no fee. There is no second link when the deal's carry is already 0, or when the operator's rules ask for a reviewer's approval of different terms. If the operator allows only invitations to a named address, these links carry terms for your email invitations and cannot be opened by anyone. **New terms** makes a link with its own carry and cash fee, if the operator allows it; say why they differ and confirm they are not an incentive. Terms cannot be changed once saved, and some need a reviewer's approval before the link works. **Show link** shows a link anyone can open, for you to copy by hand. **Turn off** stops it: people bound to it who have not committed lose the invitation. Links do not expire and have no use limit; a deal can have up to 500 in use.
 
 **Invite by email.** Give an address and the terms, then **Send invitation**. The email holds no details of the deal, and only an account that confirmed that address can use it.
 
@@ -74,6 +74,7 @@ Each person on your expected list shows a status:
 | **Payment sent** | They said they have paid. This is not a receipt. |
 | **Part paid** / **Funded** / **Funded · refund due** | What the operator has recorded as received. |
 | **Declined** | They said they will not invest. |
+| **Reconfirm terms** / **Confirm amount** | They must answer changed terms or a new amount you proposed (section 7). |
 | **With the operator** | The operator is handling something about them. You are not told what. |
 | **No longer taking part** | Their invitation ended. |
 
@@ -87,7 +88,7 @@ People who came through a link but are not on your list show only as counts on t
 
 Once the deal is live, **Investor list** shows everyone who committed, with figures for the deal: **Committed**, **Received**, **Refund due**, **Refunded**, **With the operator**, **Lead fees** and **Usable for the deal**. Filter by **Status** and by **Waiting on** (**The investor**, **A reviewer**, **The lead** or **Nobody**). Each row shows **Waiting on**, **Days at this step**, the commitment, what was received, the lead fee and the carry. **Download this list (CSV)** works only if the operator allows leads to export.
 
-Besides the statuses in section 6, the list can show **Reconfirm terms**, **Confirm amount**, **Waitlisted**, **Removed**, **Withdrawn**, **Cancelled** and **Not approved**. **no answer by the deadline** means someone did not answer changed terms in time.
+Besides the statuses in section 6, the list can show **Waitlisted**, **Removed**, **Withdrawn** and **Cancelled**. **no answer by the deadline** means someone did not answer changed terms in time.
 
 **Actions for** a person opens what you can do for them. A button you cannot use says why under it.
 
@@ -97,7 +98,7 @@ Besides the statuses in section 6, the list can show **Reconfirm terms**, **Conf
 - **Record a withdrawal**: once money has arrived. Paste their written consent and tick **They asked in writing to withdraw**, then **Send to a reviewer**. If a reviewer accepts, their commitment ends and the operator puts their refund on its list.
 - **Change their link**: give someone who has not committed other terms. Once they commit, their terms are fixed.
 - **Propose a new amount**: only while no money has arrived and they have not said they paid. They answer on their deal page; nothing changes until they accept. If they do not answer in time (set by the operator, in working days), the proposal ends and their commitment stays as it was.
-- **Change their terms**: new carry or cash fee for one committed person, with one sentence they read. A reviewer decides; if approved, they are asked to reconfirm.
+- **Change their terms**: new carry or cash fee for one committed person, with one sentence they read. A reviewer decides; if approved, they are asked to reconfirm. While it waits, no other change to this deal can be sent.
 
 **Waiting list.** If you chose **Stop and start a waiting list**, the **Closing and cancelling** card shows the room left in the deal and who is waiting. **Let them in** lets one person commit. Investors join and leave the list on the deal page.
 
@@ -112,7 +113,8 @@ If the message needs approval, an approver at the operator approves it first; ch
 Click **Change this deal**, edit the sections, write **What changes and why, in one sentence (investors read it)** and click **Send this change**. **Stop without sending** drops it.
 
 - A new target close date, payment deadline or choice for **When the allocation is full** is in force at once, and investors who committed are told.
-- Anything else goes to a reviewer, who decides whether investors are only told or must reconfirm, and then to an approver. Nothing changes for investors until then.
+- Every other change goes to a reviewer. Changes to what investors get, such as a higher price, the carry or the fees, always need reconfirming; for the rest the reviewer decides whether investors are only told or must reconfirm. Where the operator asks for content approval, an approver then approves it. Nothing changes for investors until then.
+- The currency cannot change once anyone has committed.
 
 **Changes after launch** lists each change and its state: **Waiting for a reviewer**, **Reviewed, waiting for approval**, **In force**, **Returned to you** or **Taken back**. **Take back this change** works while it waits. Only one change can wait at a time.
 
@@ -122,7 +124,7 @@ When investors must reconfirm, they agree or decline by a deadline in working da
 
 The **Closing and cancelling** card shows what is committed against the minimum raise, and **SPV allocation**, **Received**, **Lead fees** and **Estimated investment, before the platform fee**.
 
-**Ask to close.** Under **Before you can ask to close:** the card lists what is missing. When nothing is, tick the box and click **Ask to close**. Links stop taking new commitments, proposed amounts not yet answered end, and nobody more is let in from the waiting list. **Take back the request to close** reopens the deal.
+**Ask to close.** Under **Before you can ask to close:** the card lists what is missing. This includes your own identity check, the company check and the identity checks of the people who control the company, so start them early. When nothing is, tick the box and click **Ask to close**. Links stop taking new commitments, proposed amounts not yet answered end, and nobody more is let in from the waiting list. **Take back the request to close** reopens the deal.
 
 **Cancel the deal.** **Ask to cancel the deal** shows what happens and any note from the operator on fees. Add a reason if you like and click **Send the request to cancel**. A reviewer must confirm it. Then every commitment ends, payment details stop being valid, investors are told not to pay, and money already received is refunded by the operator.
 

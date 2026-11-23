@@ -21,7 +21,7 @@ On **Home**, the **Eligibility** card lists your steps in order, marked **(done)
 - **Statement** (called **Classification** under some operators): choose **High net worth**, **Sophisticated** or **None of these**, answer the questions and type your full name to sign. A qualifying statement lasts 12 months. If it does not qualify, you cannot continue for 12 months, unless the operator reopens it.
 - **Assessment**: multiple-choice questions, and every answer must be right. You can try again, with different questions; after the second failed attempt, each further try waits 24 hours.
 - **A risk warning** to read and confirm.
-- **A waiting period** under some operators' rules: you click **Ask to see deals**, read a **Before you go on** warning and choose **Continue** or **Leave**, and wait at least 24 hours before deciding to continue.
+- **A waiting period** under some operators' rules: you click **Ask to see deals**, which starts a wait of at least 24 hours. You then read a **Before you go on** warning addressed to you and choose **Continue** or **Leave**, then go on with the statement and the assessment. When the wait is over, you choose **Continue** or **Leave** again.
 
 ## 4. Who you invest as
 
@@ -41,7 +41,7 @@ If you do not want to invest, click **I will not invest**.
 
 ## 6. Commit
 
-Under **Invest**, type an amount and click **Show what I would pay**. You see how the amount to pay is made up, and estimates of your investment where the platform fee is shared at close. Choose **Who is investing**, then click **Commit** with the amount. You can commit before your identity check passes.
+Under **Invest**, type an amount and click **Show what I would pay**. You see how the amount to pay is made up, and estimates of your investment where the platform fee is shared at close. Choose **Who is investing** (and, if the deal offers one, a **Tax scheme**), then click **Commit** with the amount. You can commit before your identity check passes.
 
 Each commitment has its own **Payment reference**. **Change the amount** works while the deal is live: up or down until money arrives, then only up. A change means signing again, and earlier payment details stop being valid. To withdraw after paying, see [Leaving a deal](#leaving-a-deal).
 
@@ -88,6 +88,7 @@ The page also says what to ask your bank for if a payment seems stuck. If you pa
 | **Reconfirm terms** | The terms changed: agree or decline. |
 | **Confirm amount** | The lead proposed a new amount. |
 | **Removed** / **Withdrawn** / **Cancelled** | Your commitment has ended. |
+| **Not approved** | The check on who you invest as was refused, so that commitment ended. Any money you paid is held while the operator deals with it. |
 
 ## When the terms change
 
@@ -118,7 +119,7 @@ A mail whose title starts with **Do not send money** or **Do not pay** is urgent
 
 ## Complaints
 
-On **Home**, **Complaints** shows where a complaint can go. **Make a complaint**, write it and click **Send the complaint**. The page says by when it will be acknowledged.
+On **Home**, **Complaints** shows where a complaint can go. Click **Make a complaint**, write it and click **Send the complaint**. The page says by when it will be acknowledged.
 
 ## Not available yet
 

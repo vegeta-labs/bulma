@@ -252,7 +252,7 @@ function PersonTerms({ dealId, pid, onDone }: { dealId: string; pid: string; onD
   }
   return (
     <form onSubmit={submit}>
-      <p className="hint">A reviewer decides. If it is approved, they are asked to reconfirm.</p>
+      <p className="hint">A reviewer decides. If it is approved, they are asked to reconfirm. While it waits, no other change to this deal can be sent.</p>
       <div className="row">
         <label>
           Carry %
