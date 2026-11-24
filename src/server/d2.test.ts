@@ -2111,7 +2111,7 @@ describe('what a decision is about', () => {
     expect(page.reused_earlier_check).toBe(true)
   })
 
-  it('TC-AUTHZ-02 a company decision on an unsubmitted draft gets the answer for a deal that does not exist', async () => {
+  it('TC-REV-01 a company decision on an unsubmitted draft gets the answer for a deal that does not exist', async () => {
     const who = await person(unique('hiddencompany'))
     const id = await newDeal(who, draftFor(await entityFor(who)))
     const body = { reviewed_sha256: NO_HASH }
@@ -2175,7 +2175,7 @@ describe('what a decision is about', () => {
     expect(page.can_manage).toBe(true)
   })
 
-  it('TC-AUTHZ-02 a decision on an unsubmitted draft gets the answer for a deal that does not exist', async () => {
+  it('TC-REV-01 a decision on an unsubmitted draft gets the answer for a deal that does not exist', async () => {
     const who = await person(unique('hiddendraft'))
     const id = await newDeal(who, draftFor(await entityFor(who)))
     for (const [url, actor, body] of [

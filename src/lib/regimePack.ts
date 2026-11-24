@@ -25,6 +25,24 @@ const legalText = z.strictObject({
   is_placeholder: z.boolean(),
 })
 
+/** R-ELG-05 (PRD v0.30): two prompts are the same question when they differ only in the usual copy-paste ways, not in
+ * deliberately built look-alikes: invisible format characters and emoji/text style selectors dropped first, so a letter and the
+ * accent they split join up again; Unicode-normalised (full-width, ligatures, accents); case folded (lower, upper, lower, so ß,
+ * ẞ and SS match); curly quotes and dashes as a word processor types them read as the plain ones; every Unicode space
+ * collapsed. */
+export const promptKey = (s: string) =>
+  s
+    .replace(/[\p{Cf}\p{Variation_Selector}]/gu, '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .toUpperCase()
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u201a\u201b]/g, "'")
+    .replace(/[\u201c\u201d\u201e\u201f]/g, '"')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/\p{White_Space}+/gu, ' ')
+    .trim()
+
 const question = z.strictObject({
   id: z.string().regex(/^[a-z0-9_-]{1,64}$/),
   prompt: text,
@@ -185,6 +203,10 @@ function structuralErrors(p: RegimePack): string[] {
   if (new Set(stepKinds).size !== stepKinds.length) out.push('a step kind appears twice')
   for (const q of p.assessment.questions) if (q.correct_option >= q.options.length) out.push(`question ${q.id} points at an option that does not exist`)
   if (new Set(p.assessment.questions.map((q) => q.id)).size !== p.assessment.questions.length) out.push('a question id appears twice')
+  // R-ELG-05: a retake must be a different set; the same question under two ids would let it come back
+  if (new Set(p.assessment.questions.map((q) => promptKey(q.prompt))).size !== p.assessment.questions.length) out.push('a question prompt appears twice')
+  // R-ELG-05: a prompt with nothing to read (only invisible characters) would count towards the set without asking anything
+  if (p.assessment.questions.some((q) => !promptKey(q.prompt))) out.push('a question prompt is blank')
   if (p.assessment.enabled && p.assessment.questions.length === 0) out.push('the assessment is on but has no questions')
   // R-ELG-05: half the bank is asked. Fewer than four means one question at a time, and a failure then says which was wrong
   else if (p.assessment.enabled && p.assessment.questions.length < MIN_QUESTIONS) out.push(`the assessment needs at least ${MIN_QUESTIONS} questions, so an attempt asks two or more and a retake is a different set`)

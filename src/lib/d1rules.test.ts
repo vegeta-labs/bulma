@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { SumsubKyc } from '../adapters/sumsub.ts'
 import {
-  coolingOffCounts, coolingOffOver, statementClosed, warningVariant, isQualified, judgeStatement, lockAfterFailure, lockedUntil, markAssessment, nextEligibilityStep, pickQuestions, preparation, statementAnswers, statementExpiry, stepOpen, type EligibilityFacts, type StatementAnswers,
+  bankAskable, coolingOffCounts, coolingOffOver, statementClosed, warningVariant, isQualified, judgeStatement, lockAfterFailure, lockedUntil, markAssessment, nextEligibilityStep, pickQuestions, preparation, statementAnswers, statementExpiry, stepOpen, type EligibilityFacts, type StatementAnswers,
 } from './eligibility.ts'
 import { addYears, afterProviderDecision, entityGaps, bankDetailsGiven, entityStatus, isBeneficialOwner, kycPassed, relationshipEnd, retentionDue, sameHolder } from './entity.ts'
 import { textParts } from './legalText.ts'
@@ -67,10 +67,10 @@ describe('statement', () => {
     expect(judgeStatement(cobs, { category: 'neither' })).toEqual({ qualifies: false, problems: [] })
     expect(judgeStatement(fpo, { category: 'neither' })).toEqual({ qualifies: false, problems: [] })
   })
-  it('hostile answers are refused by the schema', () => {
+  it('TC-ELG-02 hostile answers are refused by the schema', () => {
     for (const bad of [{}, { category: 'x' }, { category: 'neither', extra: 1 }, hnw('-1'), hnw('1.5'), hnw('1e9'), { ...soph({}), sophisticated: { ...soph({}).sophisticated, director: { yes: true, name: '' } } }]) expect(statementAnswers.safeParse(bad).success).toBe(false)
   })
-  it('expires twelve months on, and the 29th of February falls back', () => {
+  it('TC-ELG-02 expires twelve months on, and the 29th of February falls back', () => {
     expect(statementExpiry(new Date('2026-03-10T12:00:00Z')).toISOString()).toBe('2027-03-10T12:00:00.000Z')
     expect(statementExpiry(new Date('2028-02-29T12:00:00Z')).toISOString()).toBe('2029-02-28T12:00:00.000Z')
   })
@@ -82,18 +82,73 @@ describe('assessment', () => {
   it('TC-ELG-03 an odd bank still gives a wholly new set: three questions ask one, never repeating the last', () => {
     const three = { assessment: { ...pack.assessment, questions: pack.assessment.questions.slice(0, 3) } }
     for (const last of ['a', 'b', 'c']) for (const n of [0, 1]) {
-      const asked = pickQuestions(three, [{ questions: [last], passed: false, lockedUntil: null }], () => n)
-      expect(asked.length).toBe(1)
+      const asked = pickQuestions(three, [last], () => n)
+      expect(asked!.length).toBe(1)
       expect(asked).not.toContain(last)
     }
-    const five = { assessment: { ...pack.assessment, questions: ['a', 'b', 'c', 'd', 'e'].map((id) => ({ ...pack.assessment.questions[0]!, id })) } }
-    expect(pickQuestions(five, [], first).length).toBe(2)
+    const five = { assessment: { ...pack.assessment, questions: ['a', 'b', 'c', 'd', 'e'].map((id) => ({ ...pack.assessment.questions[0]!, id, prompt: id })) } }
+    expect(pickQuestions(five, [], first)!.length).toBe(2)
     // a retake after one left open counts it as asked
-    expect(pickQuestions(pack, [{ questions: ['a', 'b'], passed: null, lockedUntil: null }], first)).toEqual(['c', 'd'])
+    expect(pickQuestions(pack, ['a', 'b'], first)).toEqual(['c', 'd'])
+  })
+  it('TC-ELG-03 a smaller version of the same regime with too few unseen questions gives no retake, never a repeat', () => {
+    const failed = ['a', 'b', 'c', 'd']
+    for (const n of [0, 1, 2, 3]) expect(pickQuestions(pack, failed, () => n)).toBeNull()
+    const six = { assessment: { ...pack.assessment, questions: ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({ ...pack.assessment.questions[0]!, id, prompt: id })) } }
+    expect(pickQuestions(six, failed, first)).toBeNull()
+    const eight = { assessment: { ...pack.assessment, questions: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((id) => ({ ...pack.assessment.questions[0]!, id, prompt: id })) } }
+    expect(pickQuestions(eight, failed, first)).toEqual(['e', 'f', 'g', 'h'])
+  })
+  it('TC-ELG-03 a question asked last time under another id is still asked: the same wording never comes back in a retake', () => {
+    const failed = ['Which is right?', 'Pick one']
+    // a new version files the two failed questions under new ids, with other case and spacing
+    const q = (id: string, prompt: string) => ({ ...pack.assessment.questions[0]!, id, prompt })
+    const rekeyed = { assessment: { ...pack.assessment, questions: [q('x', 'which  is RIGHT?'), q('y', ' \uff30ick\u00a0one'), q('c', 'c'), q('d', 'd')] } }
+    expect(pickQuestions(rekeyed, failed, first)).toEqual(['c', 'd'])
+    const mixed = { assessment: { ...pack.assessment, questions: [q('x', 'Which is right?'), q('y', 'Pick one'), q('z', 'Pick one more'), q('c', 'c'), q('d', 'd'), q('e', 'e')] } }
+    // three asked, three new: the two rekeyed copies are not among them
+    expect(pickQuestions(mixed, failed, first)).toEqual(['z', 'c', 'd'])
+    const onlyCopies = { assessment: { ...pack.assessment, questions: [q('x', 'Which is right?'), q('y', 'Pick one'), q('c', 'c'), q('d', 'd'), q('e', 'e'), q('f', 'f')] } }
+    expect(pickQuestions(onlyCopies, failed, first)).toEqual(['c', 'd', 'e'])
+    const short = { assessment: { ...pack.assessment, questions: [q('x', 'Which is right?'), q('y', 'Pick one'), q('c', 'c'), q('d', 'd')] } }
+    expect(pickQuestions(short, [...failed, 'c'], first)).toBeNull()
+    // a new version that gives the old ids to new questions: those are new (Codex group B r3 #1)
+    const reused = { assessment: { ...pack.assessment, questions: [q('a', 'A new question'), q('b', 'Another new one'), q('x', 'Which is right?'), q('y', 'Pick one')] } }
+    expect(pickQuestions(reused, failed, first)).toEqual(['a', 'b'])
+    // invisible format characters (soft hyphen, zero-width space, word joiner) do not make a question new (Codex group B r3 #2)
+    const hidden = { assessment: { ...pack.assessment, questions: [q('x', 'Which is ri\u00adght?'), q('y', 'Pick\u200b one\u2060'), q('c', 'c'), q('d', 'd')] } }
+    expect(pickQuestions(hidden, failed, first)).toEqual(['c', 'd'])
+    // the usual copy-paste differences (PRD v0.30): an accent split by a soft hyphen, ß/ẞ/SS, a next-line character, an emoji
+    // style selector, curly quotes, a typed dash (Codex group B r4 #1, r5 #2, #4). Asked last time, the copy comes first in the bank
+    for (const [was, copy] of [
+      ['Café risk?', 'Cafe\u00ad\u0301 risk?'],
+      ['Straße risk?', 'STRASSE RISK?'],
+      ['Wie groß ist das Risiko?', 'WIE GROẞ IST DAS RISIKO?'],
+      ['Risk level?', 'Risk\u0085level?'],
+      ['\u26a0 What can you lose?', '\u26a0\ufe0f What can you lose?'],
+      ["What's the risk?", 'What\u2019s the risk?'],
+      ['Is it "safe"?', 'Is it \u201csafe\u201d?'],
+      ['Lock-up period?', 'Lock\u2013up period?'],
+    ] as [string, string][]) {
+      const bank = { assessment: { ...pack.assessment, questions: [q('x', copy), q('c', 'c'), q('d', 'd'), q('e', 'e')] } }
+      expect(pickQuestions(bank, [was], first), copy).toEqual(['c', 'd'])
+    }
+  })
+  it('TC-ELG-03 a bank that holds one question twice gives no set: it would ask it twice and a failure would say which (Codex group B r3 #3)', () => {
+    const q = (id: string, prompt: string) => ({ ...pack.assessment.questions[0]!, id, prompt })
+    const twice = { assessment: { ...pack.assessment, questions: [q('a', 'A'), q('b', 'B'), q('c', 'C'), q('d', 'c ')] } }
+    for (const n of [0, 1, 2, 3]) expect(pickQuestions(twice, [], () => n)).toBeNull()
+    expect(pickQuestions(twice, ['A', 'B'], first)).toBeNull()
+    expect(bankAskable(twice)).toBe(false)
+    // a prompt with nothing to read would fill a place in the set (Codex group B r4 #5)
+    const blank = { assessment: { ...pack.assessment, questions: [q('a', '\u00ad'), q('b', 'B'), q('c', 'C'), q('d', 'D')] } }
+    for (const n of [0, 1, 2, 3]) expect(pickQuestions(blank, [], () => n)).toBeNull()
+    expect(bankAskable(blank)).toBe(false)
+    expect(bankAskable(pack)).toBe(true)
   })
   it('TC-ELG-03 half the bank, a different set next time, and any bank size works', () => {
     expect(pickQuestions(pack, [], first)).toEqual(['a', 'b'])
-    expect(pickQuestions(pack, [{ questions: ['a', 'b'], passed: false, lockedUntil: null }], first)).toEqual(['c', 'd'])
+    expect(pickQuestions(pack, ['a', 'b'], first)).toEqual(['c', 'd'])
     expect(pickQuestions(pack, [], (n) => n - 1)).toEqual(['d', 'c'])
   })
   it('TC-ELG-03 all must be right; a missing answer or a proto key is wrong', () => {
@@ -222,7 +277,7 @@ describe('entities', () => {
     expect(bankDetailsGiven({ sort_code: '11-22-33', account_number: '12345678' })).toBe(true)
     expect(sameHolder('---', '...')).toBe(false)
   })
-  it('a pass belongs to one identity version and ends on its date', () => {
+  it('TC-KYC-02 a pass belongs to one identity version and ends on its date', () => {
     const c = { status: 'approved' as const, entityVersion: 2, expiresOn: '2029-01-01' }
     expect(kycPassed(c, 2, '2028-12-31')).toBe(true)
     expect(kycPassed(c, 2, '2029-01-01')).toBe(false)

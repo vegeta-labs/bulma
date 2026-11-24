@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest'
+import { renderPdf } from './pdf.ts'
 import { pdfText } from './pdfText.ts'
 import { codeAt, stepOf } from '../lib/totp.ts'
 import { tx } from '../store/db.ts'
@@ -86,6 +87,9 @@ async function person(email: string, inviteCookie?: string): Promise<Client> {
   return login(email)
 }
 
+const NEUTRAL = 'This deal is not available to you at the moment.'
+const PROPOSAL_ENDED = 'This proposal has ended. Your amount is unchanged.'
+const RECONFIRM_ENDED = 'There is nothing to reconfirm here any more. Open the deal again.'
 let n = 0
 const unique = (s: string) => `${s}${++n}@example.test`
 
@@ -173,6 +177,38 @@ async function liveDeal(who: Client, over: Record<string, unknown> = {}, o: { co
   return id
 }
 
+/** A launched deal whose document is a real PDF uploaded through the route (liveDeal's is a stand-in row with no stored bytes). */
+async function liveDealWithPdf(who: Client, pdf: Buffer): Promise<string> {
+  let ent = leadEntities.get(who.id)
+  if (!ent) leadEntities.set(who.id, (ent = await newEntity(who)))
+  const id = (await inject('POST', '/api/deals', who, {})).json().id as string
+  expect((await inject('PUT', `/api/deals/${id}/draft`, who, draftFor(ent))).statusCode).toBe(200)
+  const up = await app.inject({
+    method: 'POST',
+    url: `/api/deals/${id}/files?kind=legal&name=document.pdf`,
+    remoteAddress: nextIp(),
+    headers: { cookie: who.cookie, 'x-csrf-token': who.csrf, 'content-type': 'application/octet-stream' },
+    payload: pdf,
+  })
+  expect(up.statusCode, up.body).toBe(200)
+  expect((await inject('POST', `/api/deals/${id}/submit`, who, {})).statusCode).toBe(200)
+  expect((await inject('POST', `/api/review/deals/${id}/approve`, reviewer, { reviewed_sha256: await latestSha(id) })).statusCode).toBe(200)
+  const r = await inject('POST', `/api/deals/${id}/launch`, who, { confirm: true, content_sha256: await latestSha(id, true) })
+  expect(r.statusCode, r.body).toBe(200)
+  await confirmPolicy(who, id)
+  return id
+}
+
+/** A one-page PDF whose text makes its bytes unique to the call. */
+async function onePagePdf(text = `Document ${randomUUID()}`): Promise<Buffer> {
+  const { PDFDocument } = await import('pdf-lib')
+  const doc = await PDFDocument.create()
+  doc.addPage([300, 300]).drawText(text)
+  return Buffer.from(await doc.save())
+}
+const dealDoc = async (deal: string) =>
+  (await t.owner.query<{ id: string }>("SELECT id FROM stored_file WHERE owner_id = $1 AND scope = 'deal_shared' AND removed_at IS NULL", [deal])).rows[0]!.id
+
 /** R-PIP-06: the lead confirms the operator's text on whom to invite, as shown. */
 async function confirmPolicy(who: Client, deal: string) {
   const p = (await inject('GET', `/api/deals/${deal}/invitee-policy`, who)).json()
@@ -199,14 +235,21 @@ async function open(token: string): Promise<string> {
 }
 
 /** A qualified investor with a passed entity, invited to the deal through its default link. */
-async function investor(deal: string, o: { link?: string; leader?: Client } = {}) {
+async function investor(deal: string, o: { link?: string; leader?: Client; qualify?: (u: Client) => Promise<void>; byAddress?: boolean } = {}) {
   const ls = await links(deal, o.leader)
   const link = o.link ?? ls.find((l) => l.is_default && l.carry_bps === 2000)!.id
-  const cookie = await open(tokenOf(await urlOf(deal, link, o.leader)))
-  const u = await person(unique('inv'), cookie)
+  let cookie: string
+  let email = unique('inv')
+  if (o.byAddress) {
+    // a link that keeps terms only (no open links, e.g. under COBS): a targeted invitation to the address
+    email = unique('target')
+    expect((await inject('POST', `/api/deals/${deal}/targeted`, o.leader ?? lead, { email, link_id: link })).statusCode).toBe(200)
+    cookie = await open(/token=([\w-]+)/.exec((await mailTo(email))[0]!.body)![1]!)
+  } else cookie = await open(tokenOf(await urlOf(deal, link, o.leader)))
+  const u = await person(email, cookie)
   const acc = await inject('POST', '/api/invite/accept', u, {})
   expect(acc.json().results).toEqual([{ deal_code: expect.any(String), result: 'invited' }])
-  await qualify(u)
+  await (o.qualify ?? qualify)(u)
   const entity = await newEntity(u)
   await passKyc(entity)
   return { u, entity }
@@ -667,6 +710,7 @@ describe('signing and paying', () => {
     expect(text.join(' ')).toContain('PLACEHOLDER')
     expect(text.join(' ')).toContain('£15,600.00')
     expect(text.join(' ')).toContain('verify-instruction')
+    expect(text.join(' ')).toContain('Before paying, check that these details are still valid.')
     const token = new URL(page.verify_url, 'http://x').searchParams.get('token')!
     expect((await inject('GET', `/api/instructions/verify?token=${token}`)).json().valid).toBe(true)
     expect((await change(u, deal, p, '1600000')).statusCode).toBe(200)
@@ -1000,6 +1044,36 @@ describe('switches and access', () => {
     const reach = (await inject('GET', `/api/deals/${deal}/links`, lead)).json().reach
     expect(reach.counts.uk).toBe(1)
     expect(reach.note).toMatch(/reminders/)
+    expect(reach.note).toContain('Do not promote this deal publicly.')
+  })
+
+  it('TC-LNK-09 someone who passed or whose invitation was withdrawn still counts: they received the promotion, and the warning stays', async () => {
+    const deal = await liveDeal(lead)
+    const people = [await investor(deal), await investor(deal), await investor(deal)]
+    for (const p of people) expect((await inject('PUT', '/api/my/country', p.u, { country: 'GB' })).statusCode).toBe(200)
+    const link = (await links(deal)).find((l) => l.is_default && l.carry_bps === 2000)!
+    // more people in the UK bound on the same link: 134 gives no warning, the 135th starts it (Codex group B r3 #11)
+    const bind = (from: number, to: number) =>
+      t.owner.query(
+        `WITH u AS (INSERT INTO user_account (id, email, name, must_change_password, country)
+                    SELECT gen_random_uuid(), 'reach' || g || '@example.test', 'R', false, 'GB' FROM generate_series($3::int, $4::int) g RETURNING id)
+         INSERT INTO deal_invitation (id, deal_id, user_id, invite_link) SELECT gen_random_uuid(), $1, u.id, $2 FROM u`,
+        [deal, link.id, from, to],
+      )
+    const reach = async () => (await inject('GET', `/api/deals/${deal}/links`, lead)).json().reach as { counts: { uk: number }; warnings: { ukPeopleNear: boolean } }
+    await bind(1, 131)
+    expect(await reach()).toMatchObject({ counts: { uk: 134 }, warnings: { ukPeopleNear: false } })
+    await bind(132, 132)
+    const expectWarned = async () => expect(await reach()).toMatchObject({ counts: { uk: 135 }, warnings: { ukPeopleNear: true } })
+    await expectWarned()
+    expect((await inject('POST', `/api/my/deals/${deal}/pass`, people[0]!.u, {})).statusCode).toBe(200)
+    await expectWarned()
+    // bound again after passing: still one person
+    await t.owner.query('INSERT INTO deal_invitation (id, deal_id, user_id, invite_link) VALUES (gen_random_uuid(), $1, $2, $3)', [deal, people[0]!.u.id, link.id])
+    await expectWarned()
+    expect((await inject('POST', `/api/deals/${deal}/links/${link.id}/disable`, lead, {})).json().revoked).toBe(135)
+    expect(await count("SELECT count(*) AS n FROM deal_invitation WHERE deal_id = $1 AND state = 'active'", [deal])).toBe(0)
+    await expectWarned()
   })
 })
 
@@ -1834,7 +1908,7 @@ describe('fixes from Codex round 2', () => {
 })
 
 describe('the route-by-condition gate matrix (TC-GATE-02, TC-GATE-03)', () => {
-  type Condition = [string, (u: Client) => Promise<void>]
+  type Condition = [string, (u: Client) => Promise<void>, ('cobs' | undefined)?]
   const conditions: Condition[] = [
     ['no statement', async (u) => void (await t.owner.query('DELETE FROM eligibility_statement WHERE user_id = $1', [u.id]))],
     [
@@ -1859,13 +1933,81 @@ describe('the route-by-condition gate matrix (TC-GATE-02, TC-GATE-03)', () => {
     ],
     ['assessment not passed', async (u) => void (await t.owner.query('UPDATE assessment_attempt SET passed = false WHERE user_id = $1', [u.id]))],
     ['warning block not confirmed', async (u) => void (await t.owner.query("UPDATE warning_ack SET legal_text_sha256 = 'x' WHERE user_id = $1", [u.id]))],
+    // under the COBS pack (a deal keeps the pack it was launched under, so the deal is launched under COBS): R-ELG-06
+    [
+      'COBS, cooling-off not over',
+      async (u) => {
+        // a wait that has not run its 24 hours, so the choice to continue is not open yet
+        await t.owner.query("UPDATE cooling_off SET started_at = $2::timestamptz - interval '1 hour', ends_at = $2::timestamptz + interval '23 hours', decision = NULL WHERE user_id = $1", [
+          u.id,
+          clock.toISOString(),
+        ])
+        expect((await inject('GET', '/api/eligibility', u)).json()).toMatchObject({ next: 'cooling_off_decision', cooling_off_over: false, qualified: false })
+      },
+      'cobs',
+    ],
+    [
+      'COBS, assessment locked',
+      async (u) => {
+        // the pass taken away, then the second failure through the route locks the assessment
+        await t.owner.query('UPDATE assessment_attempt SET passed = false WHERE user_id = $1', [u.id])
+        expect((await answerAssessment(u, false)).locked_until).toBeTruthy()
+        expect((await inject('POST', '/api/eligibility/assessment/start', u)).statusCode).toBe(409)
+        const e = (await inject('GET', '/api/eligibility', u)).json()
+        expect(e).toMatchObject({ next: 'assessment', qualified: false })
+        expect(e.assessment_locked_until).toBeTruthy()
+      },
+      'cobs',
+    ],
   ]
+
+  /** COBS through its routes: request, personalised warning, classification, assessment; the 24 hours pass; continue. */
+  async function qualifyCobs(u: Client) {
+    expect((await inject('POST', '/api/eligibility/request', u, {})).statusCode).toBe(200)
+    let e = (await inject('GET', '/api/eligibility', u)).json()
+    expect(e.next).toBe('personalised_warning')
+    expect(
+      (await inject('POST', '/api/eligibility/warning', u, { kind: 'personalised_warning', decision: 'continue', shown_sha256: e.shown_sha256 })).statusCode,
+    ).toBe(200)
+    e = (await inject('GET', '/api/eligibility', u)).json()
+    expect(e.next).toBe('classification')
+    const net = { category: 'high_net_worth', high_net_worth: { income: { yes: true, amount_minor: '10000000' }, net_assets: { yes: false } } }
+    const s = await inject('POST', '/api/eligibility/statement', u, { answers: net, signed_name: 'Fay Fictional', shown_sha256: e.shown_sha256 })
+    expect(s.json().qualifies).toBe(true)
+    expect((await answerAssessment(u, true)).passed).toBe(true)
+    expect((await inject('POST', '/api/eligibility/cooling-off', u, { decision: 'continue' })).statusCode).toBe(409) // not 24 hours yet
+    await t.owner.query("UPDATE cooling_off SET started_at = started_at - interval '25 hours', ends_at = ends_at - interval '25 hours' WHERE user_id = $1", [u.id])
+    expect((await inject('POST', '/api/eligibility/cooling-off', u, { decision: 'continue' })).statusCode).toBe(200)
+    expect((await inject('GET', '/api/eligibility', u)).json().qualified).toBe(true)
+  }
+  /** One attempt under the active pack, every answer right or every answer wrong. */
+  async function answerAssessment(u: Client, right: boolean): Promise<{ passed: boolean; locked_until: string | null }> {
+    const a = (await inject('POST', '/api/eligibility/assessment/start', u)).json()
+    const pack = (
+      await t.owner.query<{ content: { assessment: { questions: Array<{ id: string; correct_option: number; options: unknown[] }> } } }>(
+        'SELECT r.content FROM regime_pack r JOIN instance_profile i ON i.active_pack_id = r.id',
+      )
+    ).rows[0]!.content
+    const answers = Object.fromEntries(
+      a.questions.map((q: { id: string }) => {
+        const x = pack.assessment.questions.find((y) => y.id === q.id)!
+        return [q.id, right ? x.correct_option : (x.correct_option + 1) % x.options.length]
+      }),
+    )
+    return (await inject('POST', '/api/eligibility/assessment/answer', u, { attempt_id: a.id, answers })).json()
+  }
 
   it.each(conditions)(
     'TC-GATE-02 / TC-GATE-03 %s: every new step refused with no deal content; the signed document and the issued instruction still served',
-    async (_name, apply) => {
-      const deal = await liveDeal(lead)
-      const { u, entity } = await investor(deal)
+    async (_name, apply, pack) => {
+      if (pack === 'cobs') {
+        const fpo = (await t.owner.query<{ active_pack_id: string }>('SELECT active_pack_id FROM instance_profile')).rows[0]!.active_pack_id
+        const cobs = (await t.owner.query<{ id: string }>("SELECT id FROM regime_pack WHERE key = 'uk-cobs-template' ORDER BY version DESC LIMIT 1")).rows[0]!.id
+        await t.owner.query('UPDATE instance_profile SET active_pack_id = $1', [cobs])
+        onTestFinished(async () => void (await t.owner.query('UPDATE instance_profile SET active_pack_id = $1', [fpo])))
+      }
+      const deal = await liveDealWithPdf(lead, await onePagePdf())
+      const { u, entity } = await investor(deal, pack === 'cobs' ? { qualify: qualifyCobs, byAddress: true } : {})
       // a second entity, committed and unsigned, for the signing routes
       const second = await newEntity(u, 'Fay Second')
       await passKyc(second)
@@ -1884,24 +2026,76 @@ describe('the route-by-condition gate matrix (TC-GATE-02, TC-GATE-03)', () => {
         payer_account: '1',
       })
       const sheet = (await inject('GET', `/api/my/participations/${unsigned}/deal-sheet`, u)).json()
+      // the commit probe is a whole, valid commitment: a fresh KYC-passed entity and the deal's own link, quoted before the
+      // condition; the same body for another fresh entity is accepted while the condition is off (fresh review 3)
+      const [fresh, control] = [await newEntity(u, 'Fay Third'), await newEntity(u, 'Fay Fourth')]
+      await passKyc(fresh)
+      await passKyc(control)
+      const q = (await inject('POST', `/api/my/deals/${deal}/quote`, u, { commitment_minor: '1000000' })).json()
+      const commitBody = (e: string) => ({ entity_id: e, commitment_minor: '1000000', quoted_due_minor: q.due_minor, terms_link_id: q.terms_link_id })
+      const accepted = await inject('POST', `/api/my/deals/${deal}/commit`, u, commitBody(control))
+      expect(accepted.statusCode, accepted.body).toBe(200)
+      // the other gated steps, each shown to work before the condition (Codex group B r1 #6): the deal's document, a change to
+      // a commitment quoted now, the amount-proposal and reconfirmation screens, the updates
+      const controlPart = (await inject('GET', `/api/my/deals/${deal}`, u)).json().participations.find((x: { entity: { id: string } }) => x.entity.id === control).id as string
+      const changeBody = async (amount: string) => ({
+        commitment_minor: amount,
+        quoted_due_minor: (await inject('POST', `/api/my/deals/${deal}/quote`, u, { commitment_minor: amount })).json().due_minor as string,
+      })
+      const changed = await inject('PUT', `/api/my/participations/${controlPart}/commitment`, u, await changeBody('1500000'))
+      expect(changed.statusCode, changed.body).toBe(200)
+      const raise = await changeBody('2000000')
+      const doc = await dealDoc(deal)
+      const steps: Array<[string, string, unknown, string]> = [
+        ['GET', `/api/my/deals/${deal}/files/${doc}`, undefined, 'Not found.'],
+        ['PUT', `/api/my/participations/${controlPart}/commitment`, raise, NEUTRAL],
+        ['GET', `/api/my/participations/${p}/amount-proposal`, undefined, NEUTRAL],
+        ['GET', `/api/my/participations/${p}/reconfirmation`, undefined, NEUTRAL],
+        ['GET', `/api/my/deals/${deal}/updates`, undefined, NEUTRAL],
+      ]
+      for (const [m, url] of steps.filter(([m]) => m === 'GET')) expect((await inject(m, url, u)).statusCode, `before: ${m} ${url}`).toBe(200)
+      // the four decisions, with whole bodies: before the condition each gets past the gate to its own "ended" answer (nothing
+      // is open), so after it the gate's refusal is the gate's (Codex group B r2 #5)
+      const decisions: Array<[string, unknown, string]> = [
+        [`/api/my/participations/${p}/amount-proposal/accept`, { proposal_id: randomUUID(), quoted_due_minor: '1000000' }, PROPOSAL_ENDED],
+        [`/api/my/participations/${p}/amount-proposal/decline`, { proposal_id: randomUUID() }, PROPOSAL_ENDED],
+        [`/api/my/participations/${p}/reconfirmation/agree`, { reconfirmation_id: randomUUID(), agree: true }, RECONFIRM_ENDED],
+        [`/api/my/participations/${p}/reconfirmation/decline`, { reconfirmation_id: randomUUID() }, RECONFIRM_ENDED],
+      ]
+      for (const [url, body, ended] of decisions) {
+        const r = await inject('POST', url, u, body)
+        expect([r.statusCode, r.json().error], `before: POST ${url}`).toEqual([409, ended])
+      }
+      // money on the other parts probed too, so a renewal that does not qualify leaves every one of them active and each probe
+      // below reaches the gate rather than an ended part (Codex group B r2 #6)
+      for (const part of [controlPart, unsigned]) {
+        const r = await inject('POST', `/api/review/participations/${part}/receipts`, reviewer, { amount_minor: '100', received_on: '2026-11-10', payer_name: 'Fay Fictional', payer_account: '1' })
+        expect(r.statusCode, r.body).toBe(200)
+      }
       await apply(u)
-      const refused: Array<[string, string, unknown]> = [
-        ['GET', `/api/my/deals/${deal}`, undefined],
-        ['POST', `/api/my/deals/${deal}/quote`, { commitment_minor: '1000000' }],
-        ['POST', `/api/my/deals/${deal}/commit`, { entity_id: entity, commitment_minor: '1000000', quoted_due_minor: '1000000', terms_link_id: randomUUID() }],
-        ['GET', `/api/my/participations/${unsigned}/deal-sheet`, undefined],
+      expect(await count("SELECT count(*) AS n FROM participation WHERE id = ANY($1::uuid[]) AND outcome = 'active'", [[p, controlPart, unsigned]])).toBe(3)
+      const refused: Array<[string, string, unknown, string]> = [
+        ['GET', `/api/my/deals/${deal}`, undefined, NEUTRAL],
+        ['POST', `/api/my/deals/${deal}/quote`, { commitment_minor: '1000000' }, NEUTRAL],
+        ['POST', `/api/my/deals/${deal}/commit`, commitBody(fresh), NEUTRAL],
+        ['GET', `/api/my/participations/${unsigned}/deal-sheet`, undefined, NEUTRAL],
         [
           'POST',
           `/api/my/participations/${unsigned}/sign`,
           { agree: true, signed_name: 'Fay Fictional', document_sha256: sheet.document_sha256 ?? 'a'.repeat(64) },
+          'This cannot be signed now.',
         ],
-        ['GET', `/api/my/participations/${unsigned}/instructions`, undefined],
+        ...steps,
+        ...decisions.map(([url, body]): [string, string, unknown, string] => ['POST', url, body, NEUTRAL]),
       ]
-      for (const [m, url, body] of refused) {
+      for (const [m, url, body, error] of refused) {
         const r = await inject(m, url, u, body)
+        // the gate's own refusal, not any refusal (a stale quote would also be one)
         expect([404, 409], `${m} ${url}`).toContain(r.statusCode)
+        expect(r.json().error, `${m} ${url}`).toBe(error)
         expect(holdsNoSeed(r.body), `${m} ${url}`).toBe(true)
       }
+
       expect((await inject('GET', '/api/my/deals', u)).json().deals[0]).toMatchObject({ visible: false, name: null, company: null })
       // the narrow exceptions (§5.5)
       expect((await inject('GET', `/api/my/participations/${p}/signed`, u)).statusCode).toBe(200)
@@ -4170,7 +4364,7 @@ describe('D4 amount proposals, a full deal and the waiting list (R-ALO-01, R-ALO
     )
   })
 
-  it('R-CLS-00 the closing page shows the allocation, money received, lead fees and estimated investment, the same figures as the panel', async () => {
+  it('TC-CLS-11 R-CLS-00 the closing page shows the allocation, money received, lead fees and estimated investment, the same figures as the panel', async () => {
     const deal = await liveDeal(lead)
     const a = await committed(deal, '2000000', await feeLink(deal, ON_TOP))
     await receive(a.p, '2080000')
@@ -4710,7 +4904,7 @@ describe('D4 changes to a live deal (R-CHG-01, R-CHG-02, R-CHG-05, R-CMP-02, §5
     expect(await pending(a.p)).toBe(1)
   })
 
-  it('§5.3 a second change replaces the first: the first is superseded and both compare with the version last agreed', async () => {
+  it('TC-STAT-05 §5.3 a second change replaces the first: the first is superseded and both compare with the version last agreed', async () => {
     const deal = await liveDeal(lead)
     const a = await ready(deal, '200000')
     const agreed = (await dealRow(deal)).approved_version
@@ -4730,7 +4924,7 @@ describe('D4 changes to a live deal (R-CHG-01, R-CHG-02, R-CHG-05, R-CMP-02, §5
     expect(await termsVersion(a.p)).toBe(3)
   })
 
-  it('R-CMP-02 with content approval on: after review investors still see the old version until an approver with no stake approves', async () => {
+  it('TC-CMP-02 R-CMP-02 with content approval on: after review investors still see the old version until an approver with no stake approves', async () => {
     const approver = await staff(unique('approver'), ['approver'])
     const deal = await liveDeal(lead)
     const a = await ready(deal, '200000')
@@ -4769,7 +4963,7 @@ describe('D4 changes to a live deal (R-CHG-01, R-CHG-02, R-CHG-05, R-CMP-02, §5
     }
   })
 
-  it('R-CHG-02 refused: a page from an older version, nothing changed, a decision on other content, the lead returning it; returned with a reason', async () => {
+  it('TC-CHG-02 R-CHG-02 refused: a page from an older version, nothing changed, a decision on other content, the lead returning it; returned with a reason', async () => {
     const deal = await liveDeal(lead)
     const row = await dealRow(deal)
     expect(
@@ -4910,7 +5104,7 @@ describe('D4 changes to a live deal (R-CHG-01, R-CHG-02, R-CHG-05, R-CMP-02, §5
     expect((await t.owner.query('SELECT agreed_version FROM participation WHERE id = $1', [a.p])).rows[0]!.agreed_version).toBe(moved.deal_version)
   })
 
-  it('R-CHG-05 a price set while it stays hidden: shown only as "set"; its value never reaches the investor', async () => {
+  it('TC-CHG-04 R-CHG-05 a price set while it stays hidden: shown only as "set"; its value never reaches the investor', async () => {
     const deal = await liveDeal(lead)
     const a = await ready(deal, '200000')
     await decide((await ask(deal, (d) => (d.terms!.pre_money_minor = '600000000'))).json().id)
@@ -5084,7 +5278,7 @@ describe('D4 changes to a live deal (R-CHG-01, R-CHG-02, R-CHG-05, R-CMP-02, §5
     expect(await reminded()).toBe(2)
   })
 
-  it('§5.3 a second change replaces the first and restarts the clock: the one who agreed compares with what they agreed, the silent one with the older version', async () => {
+  it('TC-STAT-05 §5.3 a second change replaces the first and restarts the clock: the one who agreed compares with what they agreed, the silent one with the older version', async () => {
     const deal = await liveDeal(lead)
     const a = await ready(deal, '200000')
     const b = await ready(deal, '200000')
@@ -5254,7 +5448,7 @@ describe('D4 changes to a live deal (R-CHG-01, R-CHG-02, R-CHG-05, R-CMP-02, §5
     expect(refused.json().error).toBe('This deal cannot be changed in its state.')
   })
 
-  it('§5.3 taking a change back: a silent person whose agreed version is in force again has nothing to reconfirm; the one who agreed to the change is asked again', async () => {
+  it('TC-STAT-05 §5.3 taking a change back: a silent person whose agreed version is in force again has nothing to reconfirm; the one who agreed to the change is asked again', async () => {
     await allowLinkTerms(true)
     const deal = await liveDeal(lead)
     const a = await ready(deal, '200000')
@@ -5293,7 +5487,7 @@ describe('D4 changes to a live deal (R-CHG-01, R-CHG-02, R-CHG-05, R-CMP-02, §5
     expect((await statusOf(b.u, deal)).status).toBe('funded')
   })
 
-  it('R-ALO-04 a larger allocation tells the lead when people are waiting', async () => {
+  it('TC-ALO-04 R-ALO-04 a larger allocation tells the lead when people are waiting', async () => {
     const deal = await liveDeal(lead, { terms: { ...draftFor('x').terms, allocation_minor: '1000000', over_allocation: 'stop_and_waitlist' } })
     const full = await investor(deal)
     const done = await commit(full.u, deal, full.entity, '1000000')
@@ -7085,4 +7279,803 @@ describe('D4 retention: the person, the deal and the transaction clocks (R-KYC-0
     expect(typed.json().differs_from_source).toBe(true)
   })
 
+})
+
+describe('the access matrix, every route from the route table (TC-AUTHZ-01, TC-AUTHZ-02, R-AUD-03, R-KYC-03)', () => {
+  const NEUTRAL_REFUSAL = 'This deal is not available to you at the moment.'
+  const NEUTRAL_WHY = 'a person never invited gets the same words as any other refusal, so the deal is not revealed'
+  type Route = { method: string; url: string; gate: string }
+  type Ids = { deal: string; p: string; entity: string; file: string; syndicate: string; link: string; invitation: string; entry: string; dealFile: string; user: string }
+  // who tries a route that names someone else's thing: the lead of another deal, an investor of another deal, an investor in the
+  // same deal (not the owner), and the lead of the owner's deal where the thing is the investor's own
+  type Who = 'otherLead' | 'outsider' | 'sameDeal' | 'dealLead'
+  const LEAD: Who[] = ['otherLead', 'outsider', 'sameDeal']
+  const INVITED: Who[] = ['otherLead', 'outsider']
+  const PERSONAL: Who[] = ['otherLead', 'outsider', 'sameDeal', 'dealLead']
+  const routeKey = (m: string, u: string) => `${m} ${u}`
+
+  /** Every route that is not public and not behind a staff role, and how it is tried. A new route not named here fails the first test. */
+  type Probe = { who: Who[]; body?: unknown; raw?: string; refusal?: { error: string; why: string } }
+  const plan = (i: Ids): Record<string, Probe | { own: string }> => {
+    const own = (why: string) => ({ own: why })
+    const MINE = 'acts only on the caller’s own account or records; no id of another person or deal is taken'
+    return {
+      'POST /api/logout': own(MINE),
+      'GET /api/session': own(MINE),
+      'POST /api/password': own(MINE),
+      'GET /api/sandbox/payment-instruction/:currency': own('the same fictional sandbox details for everyone (R-OP-01)'),
+      'POST /api/account/resend-verification': own(MINE),
+      'POST /api/mfa/start': own(MINE),
+      'POST /api/mfa/confirm': own(MINE),
+      'POST /api/account/name': own(MINE),
+      'POST /api/account/email': own(MINE),
+      'POST /api/account/delete': own(MINE),
+      'GET /api/entities': own(MINE),
+      'POST /api/entities': own(MINE),
+      'GET /api/kyc/routes': own(MINE),
+      'GET /api/eligibility': own(MINE),
+      'POST /api/eligibility/request': own(MINE),
+      'POST /api/eligibility/warning': own(MINE),
+      'POST /api/eligibility/statement': own(MINE),
+      'POST /api/eligibility/assessment/start': own(MINE),
+      'POST /api/eligibility/assessment/answer': own('the attempt id it takes is tried with another person’s open attempt in the test of ids in a body below'),
+      'POST /api/eligibility/cooling-off': own(MINE),
+      'POST /api/deals': own('takes no body: a new empty draft of the caller’s own; the syndicate a draft names is tried in the test of ids in a body below'),
+      'GET /api/deals': own(MINE),
+      'POST /api/syndicates': own(MINE),
+      'GET /api/syndicates': own(MINE),
+      'POST /api/syndicate-invites/accept': own('takes a one-time invitation token, not an id (TC-SYN-02)'),
+      'POST /api/invite/accept': own('takes the invitation cookie of this browser, not an id (R-LNK-10)'),
+      'GET /api/my/deals': own(MINE),
+      'GET /api/my/participations': own(MINE),
+      'GET /api/my/country': own(MINE),
+      'PUT /api/my/country': own(MINE),
+      'GET /api/my/mail': own(MINE),
+      'GET /api/my/complaints': own(MINE),
+      'POST /api/my/complaints': own(MINE),
+      // someone else's entity and KYC file
+      'PUT /api/entities/:id': { who: PERSONAL, body: { fields: { full_name: 'Mallory' }, parties: [] } },
+      'GET /api/files/:id': { who: PERSONAL },
+      'POST /api/entities/:id/parties/:party/link': { who: PERSONAL, body: {} },
+      'POST /api/entities/:id/bank': { who: PERSONAL, body: { holder: 'Fay Fictional', account_fields: { sort_code: '11-22-33', account_number: '12345678' }, evidence_file: null } },
+      'POST /api/entities/:id/kyc': { who: PERSONAL, body: { path: 'manual', confirm_true: true } },
+      'POST /api/entities/:id/kyc/link': { who: PERSONAL, body: {} },
+      'POST /api/entities/:id/files': { who: PERSONAL, raw: '?requirement=identity_proof&name=a.pdf' },
+      // someone else's deal, as its lead would
+      'GET /api/deals/:id': { who: LEAD },
+      'POST /api/deals/:id/calculator': { who: LEAD, body: { target_minor: '1000000' } },
+      'PUT /api/deals/:id/draft': { who: LEAD, body: {} },
+      'DELETE /api/deals/:id': { who: LEAD },
+      'POST /api/deals/:id/restore': { who: LEAD, body: {} },
+      'POST /api/deals/:id/submit': { who: LEAD, body: {} },
+      'POST /api/deals/:id/withdraw': { who: LEAD, body: {} },
+      'POST /api/deals/:id/launch': { who: LEAD, body: { confirm: true, content_sha256: 'a'.repeat(64) } },
+      'POST /api/deals/:id/folders': { who: LEAD, body: { name: 'x' } },
+      'POST /api/deals/:id/files': { who: LEAD, raw: '?kind=legal&name=a.pdf' },
+      'DELETE /api/deals/:id/files/:file': { who: LEAD },
+      'GET /api/deals/:id/files/:file': { who: LEAD },
+      'PUT /api/deals/:id/members/:user': { who: LEAD, body: { role: 'co_lead' } },
+      'DELETE /api/deals/:id/members/:user': { who: LEAD },
+      'POST /api/deals/:id/participations/:pid/terms': { who: LEAD, body: { carry_bps: 0, fee: { kind: 'none' }, summary: 'x', base_version: 1 } },
+      'POST /api/deals/:id/changes': { who: LEAD, body: { draft: {}, summary: 'x', base_version: 1 } },
+      'GET /api/deals/:id/changes': { who: LEAD },
+      'POST /api/deals/:id/changes/:cid/withdraw': { who: LEAD, body: {} },
+      'POST /api/deals/:id/investee/remind': { who: LEAD, body: {} },
+      'POST /api/deals/:id/investee/contacts': { who: LEAD, body: { name: 'A', email: 'a@example.test' } },
+      'GET /api/deals/:id/links': { who: LEAD },
+      'POST /api/deals/:id/links': { who: LEAD, body: { kind: 'open', carry_bps: 2000, fee: { kind: 'none' }, reason: 'x', confirm: true } },
+      'GET /api/deals/:id/links/:link/url': { who: LEAD },
+      'POST /api/deals/:id/links/:link/disable': { who: LEAD, body: {} },
+      'POST /api/deals/:id/invitations/:invitation/link': { who: LEAD, body: { link_id: i.link } },
+      'GET /api/deals/:id/invitee-policy': { who: LEAD },
+      'POST /api/deals/:id/invitee-policy': { who: LEAD, body: { version: 1, sha256: 'a'.repeat(64) } },
+      'POST /api/deals/:id/targeted': { who: LEAD, body: { email: 'someone@example.test', link_id: i.link } },
+      'POST /api/deals/:id/targeted/:targeted/resend': { who: LEAD, body: {} },
+      'GET /api/deals/:id/deal-sheet-preview': { who: LEAD },
+      'POST /api/deals/:id/copy': { who: LEAD, body: {} },
+      'GET /api/deals/:id/pipeline': { who: LEAD },
+      'POST /api/deals/:id/pipeline': { who: LEAD, body: { text: 'Pat\tpat@example.test\t10000\tdefault\n' } },
+      'DELETE /api/deals/:id/pipeline/:entry': { who: LEAD },
+      'GET /api/deals/:id/pipeline.csv': { who: LEAD },
+      'POST /api/deals/:id/pipeline/preview': { who: LEAD, body: { entries: [{ id: randomUUID(), link_id: i.link }] } },
+      'POST /api/deals/:id/pipeline/invite': { who: LEAD, body: { entries: [{ id: randomUUID(), link_id: i.link }], confirm_count: 1, plan_sha256: 'a'.repeat(64) } },
+      'GET /api/deals/:id/messages': { who: LEAD },
+      'GET /api/deals/:id/closing': { who: LEAD },
+      'POST /api/deals/:id/request-closing': { who: LEAD, body: { confirm: true } },
+      'POST /api/deals/:id/withdraw-closing': { who: LEAD, body: {} },
+      'POST /api/deals/:id/participations/:pid/remove': { who: LEAD, body: {} },
+      'POST /api/deals/:id/participations/:pid/withdrawal': { who: LEAD, body: { consent_confirmed: true, evidence: 'Email from them' } },
+      'GET /api/deals/:id/cancel-note': { who: LEAD },
+      'POST /api/deals/:id/cancel-request': { who: LEAD, body: {} },
+      'POST /api/deals/:id/participations/:pid/amount-proposal': { who: LEAD, body: { commitment_minor: '500000' } },
+      'GET /api/deals/:id/waitlist': { who: LEAD },
+      'POST /api/deals/:id/waitlist/:wid/release': { who: LEAD, body: {} },
+      'GET /api/deals/:id/panel': { who: LEAD },
+      'GET /api/deals/:id/investor-preview': { who: LEAD },
+      'GET /api/deals/:id/content': { who: LEAD },
+      'GET /api/deals/:id/participations/:pid/documents': { who: LEAD },
+      'GET /api/deals/:id/investors.csv': { who: LEAD },
+      'GET /api/deals/:id/mail/audience': { who: LEAD },
+      'POST /api/deals/:id/mail': { who: LEAD, body: { subject: 'Hi', body: 'Hello', to: { invitation_id: i.invitation } } },
+      'PUT /api/deals/:id/mail/:mid': { who: LEAD, body: { subject: 'Hi', body: 'Hello' } },
+      'POST /api/deals/:id/mail/:mid/send': { who: LEAD, body: { content_sha256: 'a'.repeat(64) } },
+      'GET /api/deals/:id/mail': { who: LEAD },
+      // someone else's syndicate
+      'GET /api/syndicates/:id': { who: LEAD },
+      'PUT /api/syndicates/:id': { who: LEAD, body: { name: 'Mallory Friends' } },
+      'POST /api/syndicates/:id/archive': { who: LEAD, body: {} },
+      'POST /api/syndicates/:id/invites': { who: LEAD, body: { role: 'admin' } },
+      'GET /api/syndicates/:id/invites': { who: LEAD },
+      'POST /api/syndicates/:id/invites/:invite/revoke': { who: LEAD, body: {} },
+      'PUT /api/syndicates/:id/members/:user': { who: LEAD, body: { role: 'deal_member' } },
+      'DELETE /api/syndicates/:id/members/:user': { who: LEAD },
+      // a deal the caller was never invited to, as an investor would
+      'GET /api/my/deals/:id': { who: INVITED, refusal: { error: NEUTRAL_REFUSAL, why: NEUTRAL_WHY } },
+      'GET /api/my/deals/:id/files/:file': { who: INVITED },
+      'POST /api/my/deals/:id/pass': { who: INVITED, body: {} },
+      'POST /api/my/deals/:id/quote': { who: INVITED, body: { commitment_minor: '1000000' }, refusal: { error: NEUTRAL_REFUSAL, why: NEUTRAL_WHY } },
+      'POST /api/my/deals/:id/commit': { who: INVITED, body: { entity_id: i.entity, commitment_minor: '1000000', quoted_due_minor: '1' } },
+      'GET /api/my/deals/:id/updates': { who: INVITED, refusal: { error: NEUTRAL_REFUSAL, why: NEUTRAL_WHY } },
+      'POST /api/my/deals/:id/waitlist': { who: INVITED, body: { desired_minor: '100000' }, refusal: { error: NEUTRAL_REFUSAL, why: NEUTRAL_WHY } },
+      'POST /api/my/deals/:id/waitlist/leave': {
+        who: INVITED,
+        body: {},
+        refusal: { error: 'You are not on the waiting list for this deal.', why: 'leaving acts only on the caller’s own place on the list, and the caller has none' },
+      },
+      'POST /api/my/deals/:id/message': { who: INVITED, body: { body: 'Hello' } },
+      // someone else's participation, including the lead of that deal
+      'PUT /api/my/participations/:id/commitment': { who: PERSONAL, body: { commitment_minor: '2000000', quoted_due_minor: '1' } },
+      'GET /api/my/participations/:id/amount-proposal': { who: PERSONAL },
+      'POST /api/my/participations/:id/amount-proposal/accept': { who: PERSONAL, body: { proposal_id: randomUUID(), quoted_due_minor: '1' } },
+      'POST /api/my/participations/:id/amount-proposal/decline': { who: PERSONAL, body: { proposal_id: randomUUID() } },
+      'GET /api/my/participations/:id/reconfirmation': { who: PERSONAL },
+      'POST /api/my/participations/:id/reconfirmation/agree': { who: PERSONAL, body: { reconfirmation_id: randomUUID(), agree: true } },
+      'POST /api/my/participations/:id/reconfirmation/decline': { who: PERSONAL, body: { reconfirmation_id: randomUUID() } },
+      'GET /api/my/participations/:id/deal-sheet': { who: PERSONAL },
+      'POST /api/my/participations/:id/sign': { who: PERSONAL, body: { agree: true, signed_name: 'Mallory', document_sha256: 'a'.repeat(64) } },
+      'GET /api/my/participations/:id/signed': { who: PERSONAL },
+      'POST /api/my/participations/:id/acknowledge-account': { who: PERSONAL, body: { account_sha256: 'a'.repeat(64) } },
+      'GET /api/my/participations/:id/instructions': { who: PERSONAL },
+      'GET /api/my/participations/:id/instructions.pdf': { who: PERSONAL },
+      'POST /api/my/participations/:id/paid': { who: PERSONAL, body: {} },
+      'POST /api/my/participations/:id/reference-report': { who: PERSONAL, body: { note: 'x' } },
+    }
+  }
+
+  /** The path with each :param filled from the owner's things. */
+  const fill = (url: string, i: Ids) =>
+    url.replace(/\/([^/]+)\/:([a-z]+)/g, (_m, seg: string, param: string) => {
+      const v =
+        param === 'pid'
+          ? i.p
+          : param === 'link'
+            ? i.link
+            : param === 'invitation'
+              ? i.invitation
+              : param === 'entry'
+                ? i.entry
+                : param === 'file'
+                  ? i.dealFile
+                  : param === 'user'
+                    ? i.user
+                    : param === 'id'
+                      ? { deals: i.deal, participations: i.p, entities: i.entity, files: i.file, syndicates: i.syndicate, invitations: i.invitation }[seg] ?? randomUUID()
+                      : param === 'currency'
+                        ? 'GBP'
+                        : randomUUID()
+      return `/${seg}/${v}`
+    })
+
+  /** The route table without the HEAD alias Fastify adds to each GET; a HEAD route of its own stays (Codex group B r1 #10). */
+  const withoutHeadAliases = (rows: Route[]) =>
+    rows.filter((r) => r.method !== 'HEAD' || !rows.some((g) => g.url === r.url && g.method.split(',').includes('GET')))
+  const table = () => withoutHeadAliases((app as unknown as { routeTable: Route[] }).routeTable)
+  /**
+   * The owner refusal itself (fresh review 2): 403, or 404/409 with one of the not-found answers, or the one answer a probe lists
+   * with its reason. Any other refusal (every business refusal is a 409) could hide a lost owner check.
+   */
+  const OWNER_REFUSALS = ['Not found.', 'Deal not found.', 'No such entity.', 'Syndicate not found.', 'no such file']
+  const ownerRefusal = (res: { statusCode: number; body: string }, listed?: string) => {
+    if (res.statusCode === 403) return true
+    if (res.statusCode !== 404 && res.statusCode !== 409) return false
+    const error = (JSON.parse(res.body || '{}') as { error?: string }).error ?? ''
+    return OWNER_REFUSALS.includes(error) || error === listed
+  }
+  const isStaffGate = (g: string) => g.startsWith('can')
+
+  it('TC-AUTHZ-01 every route is in the matrix: public, a staff role, the caller’s own, or tried on someone else’s', () => {
+    const p = plan({ deal: 'd', p: 'p', entity: 'e', file: 'f', syndicate: 's', link: 'l', invitation: 'i', entry: 'n', dealFile: 'f', user: 'u' })
+    const missing = table()
+      .filter((r) => r.gate !== 'public' && !isStaffGate(r.gate))
+      .map((r) => routeKey(r.method.replace('GET,HEAD', 'GET'), r.url))
+      .filter((k) => !(k in p))
+    expect(missing).toEqual([])
+    const gone = Object.keys(p).filter((k) => !table().some((r) => routeKey(r.method.replace('GET,HEAD', 'GET'), r.url) === k))
+    expect(gone).toEqual([])
+    const rows = (m: string, url: string) => ({ method: m, url, gate: 'verified' }) as Route
+    expect(withoutHeadAliases([rows('GET', '/a'), rows('HEAD', '/a'), rows('GET,HEAD', '/b'), rows('HEAD', '/c')]).map((r) => `${r.method} ${r.url}`)).toEqual([
+      'GET /a',
+      'GET,HEAD /b',
+      'HEAD /c',
+    ])
+  })
+
+  it('TC-AUTHZ-01 / TC-AUTHZ-02 every route tried on someone else’s participation, deal, syndicate, entity or KYC file: nothing read, nothing done', async () => {
+    const dealLead = await person(unique('vlead'))
+    const deal = await liveDeal(dealLead)
+    const x = await investor(deal, { leader: dealLead })
+    // a real KYC upload by the investor on the entity that then passes KYC and invests (Codex group B r1 #3): a lead page that
+    // showed the documents of the entities in the deal would serve it
+    const kycEntity = await newEntity(x.u)
+    const secretName = `passport-${randomUUID()}.pdf`
+    const secretBody = `%PDF-1.4 passport ${randomUUID()}`
+    const up = await app.inject({
+      method: 'POST',
+      url: `/api/entities/${kycEntity}/files?requirement=identity_proof&name=${secretName}`,
+      remoteAddress: nextIp(),
+      headers: { cookie: x.u.cookie, 'x-csrf-token': x.u.csrf, 'content-type': 'application/octet-stream' },
+      payload: Buffer.from(secretBody),
+    })
+    expect(up.statusCode, up.body).toBe(200)
+    const file = up.json().id as string
+    await passKyc(kycEntity)
+    expect((await commit(x.u, deal, kycEntity, '1000000')).statusCode).toBe(200)
+    const p = await pid(x.u, deal)
+    expect((await sign(x.u, p)).statusCode).toBe(200)
+    expect((await t.owner.query('SELECT 1 FROM participation WHERE id = $1 AND entity_id = $2', [p, kycEntity])).rowCount).toBe(1)
+    expect((await inject('GET', `/api/files/${file}`, x.u)).body).toContain(secretBody)
+    const sameDeal = (await investor(deal, { leader: dealLead })).u
+    const otherLead = await person(unique('olead'))
+    const outsider = (await investor(await liveDeal(otherLead), { leader: otherLead })).u
+    const one = async <T,>(sql: string, args: unknown[]) => (await t.owner.query<{ v: T }>(sql, args)).rows[0]!.v
+    const ids: Ids = {
+      deal,
+      p,
+      entity: kycEntity,
+      file,
+      syndicate: await one<string>('SELECT syndicate_id AS v FROM deal WHERE id = $1', [deal]),
+      link: (await links(deal, dealLead))[0]!.id,
+      invitation: await one<string>('SELECT invitation_id AS v FROM participation WHERE id = $1', [p]),
+      entry: randomUUID(),
+      dealFile: await one<string>("SELECT id AS v FROM stored_file WHERE owner_id = $1 AND scope = 'deal_shared' LIMIT 1", [deal]),
+      user: x.u.id,
+    }
+    const callers: Record<Who, Client> = { otherLead, outsider, sameDeal, dealLead }
+    const secrets = [x.u.email, p, x.entity, kycEntity, file, secretName, secretBody]
+    const leaks = (body: string) => secrets.filter((s) => body.includes(s))
+    const audits = () => count('SELECT count(*) AS n FROM audit', [])
+    const before = await audits()
+    const p0 = plan(ids)
+    const refused: string[] = []
+    const ownRead = new Map<string, string>()
+    for (const r of table().filter((r) => r.gate !== 'public')) {
+      const m = r.method.replace('GET,HEAD', 'GET')
+      const url = fill(r.url, ids)
+      const entry = p0[routeKey(m, r.url)]
+      const body = (e: typeof entry) => (e && 'body' in e ? e.body : m === 'GET' || m === 'DELETE' ? undefined : {})
+      if (isStaffGate(r.gate)) {
+        // no staff role: refused at the gate, whatever the ids
+        for (const who of [otherLead, outsider, dealLead]) {
+          const res = await inject(m, url, who, body(undefined))
+          if (res.statusCode !== 403) refused.push(`${m} ${r.url} as ${who.email}: ${res.statusCode}`)
+        }
+        continue
+      }
+      if (!entry) continue // the first test names it
+      if ('own' in entry) {
+        if (m !== 'GET') continue
+        // the caller's own page answers, and shows nothing of the investor; the deal and its syndicate only to people in it
+        // (Codex group B r1 #5)
+        for (const who of [otherLead, outsider, sameDeal, dealLead]) {
+          const res = await inject(m, url, who)
+          expect(res.statusCode, `${m} ${r.url} as ${who.email}`).toBe(200)
+          expect(leaks(res.body), `${m} ${r.url} as ${who.email}`).toEqual([])
+          if (who === otherLead || who === outsider) expect([deal, ids.syndicate].filter((s) => res.body.includes(s)), `${m} ${r.url} as ${who.email}`).toEqual([])
+          ownRead.set(`${m} ${r.url} ${who.email}`, res.body)
+        }
+        continue
+      }
+      for (const w of entry.who) {
+        const res = entry.raw
+          ? await app.inject({ method: 'POST', url: url + entry.raw, remoteAddress: nextIp(), headers: { cookie: callers[w].cookie, 'x-csrf-token': callers[w].csrf, 'content-type': 'application/octet-stream' }, payload: Buffer.from('%PDF-1.4 x') })
+          : await inject(m, url, callers[w], body(entry))
+        if (!ownerRefusal(res, entry.refusal?.error)) refused.push(`${m} ${r.url} as ${w}: ${res.statusCode} ${res.body.slice(0, 120)}`)
+        expect(leaks(res.body), `${m} ${r.url} as ${w}`).toEqual([])
+      }
+    }
+    expect(refused).toEqual([])
+    // the same pages do show it to the people in the deal: the markers above would find a leak
+    expect(ownRead.get(`GET /api/deals ${dealLead.email}`)).toContain(deal)
+    expect(ownRead.get(`GET /api/syndicates ${dealLead.email}`)).toContain(ids.syndicate)
+    expect(ownRead.get(`GET /api/my/deals ${sameDeal.email}`)).toContain(deal)
+    // an investor in the deal sees it as an investor, not on the lead's list (Codex group B r2 #8)
+    expect(ownRead.get(`GET /api/deals ${sameDeal.email}`)).not.toContain(deal)
+    expect(ownRead.get(`GET /api/syndicates ${sameDeal.email}`)).not.toContain(ids.syndicate)
+    expect(await audits()).toBe(before)
+    // R-KYC-03: the lead of the deal reads none of the investor's KYC on any of the lead's own pages (these reads are the
+    // lead's own and may be audited, so they come after the count)
+    expect(ownerRefusal(await inject('GET', `/api/files/${file}`, dealLead))).toBe(true)
+    // nor through the deal's own file route with the passport's id (Codex group B r2 #7)
+    const viaDeal = await inject('GET', `/api/deals/${deal}/files/${file}`, dealLead)
+    expect(ownerRefusal(viaDeal)).toBe(true)
+    expect([secretName, secretBody].filter((s) => viaDeal.body.includes(s))).toEqual([])
+    const read: string[] = []
+    for (const r of table().filter((r) => r.method.startsWith('GET') && r.url.startsWith('/api/deals/:id'))) {
+      const res = await inject('GET', fill(r.url, ids), dealLead)
+      if (res.statusCode === 200) read.push(r.url)
+      expect([file, secretName, secretBody].filter((s) => res.body.includes(s)), r.url).toEqual([])
+    }
+    // the lead's own pages answered, and the panel lists the participation of that entity
+    expect(read).toEqual(expect.arrayContaining(['/api/deals/:id', '/api/deals/:id/panel']))
+    expect((await inject('GET', `/api/deals/${deal}/panel`, dealLead)).body).toContain(p)
+  })
+  it('TC-AUTHZ-01 / TC-AUTHZ-02 another deal’s records by their own ids: each child route on the caller’s own deal, syndicate or entity, and each id a body takes, refused; nothing read, nothing changed', async () => {
+    const one = async (sql: string, args: unknown[]) => (await t.owner.query<{ v: string }>(sql, args)).rows[0]!.v
+    // the victim: a lead whose deal stops at its allocation and keeps a waiting list, with one real record of each kind
+    const vLead = await person(unique('vlead'))
+    const vDeal = await liveDeal(vLead, { terms: { ...draftFor('x').terms, allocation_minor: '1000000', over_allocation: 'stop_and_waitlist' } })
+    const x = await investor(vDeal, { leader: vLead })
+    expect((await commit(x.u, vDeal, x.entity, '1000000')).statusCode).toBe(200)
+    const p = await pid(x.u, vDeal)
+    const waiting = await investor(vDeal, { leader: vLead })
+    expect((await inject('POST', `/api/my/deals/${vDeal}/waitlist`, waiting.u, { desired_minor: '200000' })).statusCode).toBe(200)
+    const vLink = (await links(vDeal, vLead))[0]!.id
+    const vInvitation = await one('SELECT invitation_id AS v FROM participation WHERE id = $1', [p])
+    const vEmail = unique('vtarget')
+    expect((await inject('POST', `/api/deals/${vDeal}/targeted`, vLead, { email: vEmail, link_id: vLink })).statusCode).toBe(200)
+    expect((await inject('POST', `/api/deals/${vDeal}/pipeline`, vLead, { text: 'Vic Pipe\tvic.pipe@example.test\t10000\tdefault\n' })).json().added).toBe(1)
+    const mail = await inject('POST', `/api/deals/${vDeal}/mail`, vLead, { subject: 'Founders call', body: 'Friday at ten.', to: { invitation_id: vInvitation } })
+    expect(mail.statusCode, mail.body).toBe(200)
+    const row = (await t.owner.query<{ draft: Record<string, Record<string, unknown>>; approved_version: number }>('SELECT draft, approved_version FROM deal WHERE id = $1', [vDeal])).rows[0]!
+    const asked = await inject('POST', `/api/deals/${vDeal}/changes`, vLead, {
+      draft: { ...row.draft, terms: { ...row.draft.terms, target_close: '2027-02-28' } },
+      summary: 'We need four more weeks.',
+      base_version: row.approved_version,
+    })
+    expect(asked.statusCode, asked.body).toBe(200)
+    const vSyndicate = await one('SELECT syndicate_id AS v FROM deal WHERE id = $1', [vDeal])
+    expect((await inject('POST', `/api/syndicates/${vSyndicate}/invites`, vLead, { role: 'admin' })).statusCode).toBe(200)
+    const made = await inject('POST', '/api/entities', x.u, {
+      type: 'individual',
+      fields: { full_name: 'Fay Fictional', address: '1 Seed Street', tax_residence: 'UK', tax_id: 'SEEDTAX1' },
+      parties: [{ name: 'Pat Party', email: 'pat.party@example.test', kind: 'representative', ownership_bps: 0 }],
+    })
+    expect(made.statusCode, made.body).toBe(200)
+    const vEntity = made.json().id as string
+    const up = await app.inject({
+      method: 'POST',
+      url: `/api/entities/${vEntity}/files?requirement=identity_proof&name=passport.pdf`,
+      remoteAddress: nextIp(),
+      headers: { cookie: x.u.cookie, 'x-csrf-token': x.u.csrf, 'content-type': 'application/octet-stream' },
+      payload: Buffer.from('%PDF-1.4 passport'),
+    })
+    expect(up.statusCode, up.body).toBe(200)
+    // a real deal file, uploaded to a draft of the victim's, so that a lost owner check would serve its bytes
+    const vDraft = (await inject('POST', '/api/deals', vLead, {})).json().id as string
+    expect((await inject('PUT', `/api/deals/${vDraft}/draft`, vLead, draftFor(leadEntities.get(vLead.id)!))).statusCode).toBe(200)
+    const dealSecret = await renderPdf([{ text: `Term sheet ${randomUUID()}` }], 'Terms')
+    const vUp = await app.inject({
+      method: 'POST',
+      url: `/api/deals/${vDraft}/files?kind=legal&name=terms.pdf`,
+      remoteAddress: nextIp(),
+      headers: { cookie: vLead.cookie, 'x-csrf-token': vLead.csrf, 'content-type': 'application/octet-stream' },
+      payload: dealSecret,
+    })
+    expect(vUp.statusCode, vUp.body).toBe(200)
+    expect((await inject('GET', `/api/deals/${vDraft}/files/${vUp.json().id}`, vLead)).rawPayload.equals(dealSecret)).toBe(true)
+    // another person part-way through the assessment: an open attempt of theirs
+    const vQualifying = await person(unique('vqual'))
+    const statement = async (u: Client) => {
+      const page = (await inject('GET', '/api/eligibility', u)).json()
+      const net = { category: 'high_net_worth', high_net_worth: { income: { yes: true, amount_minor: '10000000' }, net_assets: { yes: false } } }
+      expect((await inject('POST', '/api/eligibility/statement', u, { answers: net, signed_name: 'Fay Fictional', shown_sha256: page.shown_sha256 })).statusCode).toBe(200)
+      return (await inject('POST', '/api/eligibility/assessment/start', u)).json() as { id: string; questions: Array<{ id: string }> }
+    }
+    const vAttempt = await statement(vQualifying)
+    const kid = {
+      pid: p,
+      link: vLink,
+      invitation: vInvitation,
+      file: vUp.json().id as string,
+      cid: await one('SELECT id AS v FROM change_request WHERE deal_id = $1', [vDeal]),
+      mid: await one('SELECT id AS v FROM message WHERE deal_id = $1', [vDeal]),
+      wid: await one('SELECT id AS v FROM waitlist_entry WHERE deal_id = $1', [vDeal]),
+      targeted: await one('SELECT id AS v FROM targeted_invite WHERE deal_id = $1 AND lower(email) = lower($2)', [vDeal, vEmail]),
+      entry: await one('SELECT id AS v FROM pipeline_entry WHERE deal_id = $1', [vDeal]),
+      invite: await one('SELECT id AS v FROM member_invite WHERE syndicate_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1', [vSyndicate]),
+      party: await one('SELECT id AS v FROM entity_party WHERE entity_id = $1', [vEntity]),
+    }
+    const kycFile = up.json().id as string
+
+    // the attacker: the lead of their own live deal, in their own syndicate, with their own entity, invitation and list entry
+    const aLead = await person(unique('alead'))
+    const aDeal = await liveDeal(aLead)
+    const aInvestor = await investor(aDeal, { leader: aLead })
+    const aLink = (await links(aDeal, aLead))[0]!.id
+    const aInvitation = await one('SELECT id AS v FROM deal_invitation WHERE deal_id = $1 AND user_id = $2', [aDeal, aInvestor.u.id])
+    expect((await inject('POST', `/api/deals/${aDeal}/pipeline`, aLead, { text: 'Own Pipe\town.pipe@example.test\t10000\tdefault\n' })).json().added).toBe(1)
+    const aEntry = await one('SELECT id AS v FROM pipeline_entry WHERE deal_id = $1', [aDeal])
+    // a draft of the attacker's too: a deal's files are removed only while it can be edited
+    const aDraft = (await inject('POST', '/api/deals', aLead, {})).json().id as string
+    const base = draftFor(leadEntities.get(aLead.id)!)
+    expect((await inject('PUT', `/api/deals/${aDraft}/draft`, aLead, base)).statusCode).toBe(200)
+    // its legal document, as for a live deal, so the syndicate is the one thing a submit can still find missing
+    await t.owner.query(
+      "INSERT INTO stored_file (id, scope, owner_id, requirement, display_name, content_type, sha256, size_bytes, scan_status, storage_key, key_id, wrapped_key, uploaded_by) SELECT $1, 'deal_shared', d.id, 'legal', 'a.pdf', 'application/pdf', 'x', 1, 'clean', 'k', 'k1', '\\x00', d.lead_user FROM deal d WHERE d.id = $2",
+      [randomUUID(), aDraft],
+    )
+    const aApproved = Number(await one('SELECT approved_version::text AS v FROM deal WHERE id = $1', [aDeal]))
+    const parent: Record<string, string> = {
+      deals: aDeal,
+      syndicates: await one('SELECT syndicate_id AS v FROM deal WHERE id = $1', [aDeal]),
+      entities: leadEntities.get(aLead.id)!,
+    }
+
+    // a person of the attacker's own part-way through the assessment, with an open attempt of their own
+    const aQualifying = await person(unique('aqual'))
+    const own = await statement(aQualifying)
+    // the victim's records, read whole before and after: a refused call changes none of them
+    const watched: Array<[string, string[]]> = [
+      ['participation', [p]],
+      ['invite_link', [vLink]],
+      ['deal_invitation', [vInvitation]],
+      ['stored_file', [kid.file, kycFile]],
+      ['change_request', [kid.cid]],
+      ['message', [kid.mid]],
+      ['waitlist_entry', [kid.wid]],
+      ['targeted_invite', [kid.targeted]],
+      ['pipeline_entry', [kid.entry]],
+      ['member_invite', [kid.invite]],
+      ['entity_party', [kid.party]],
+      ['assessment_attempt', [vAttempt.id]],
+      ['legal_entity', [x.entity, vEntity]],
+      ['deal', [vDeal]],
+      ['syndicate', [vSyndicate]],
+    ]
+    const snapshot = async () =>
+      Promise.all(watched.map(async ([tb, ids]) => (await t.owner.query<{ v: string }>(`SELECT t::text AS v FROM ${tb} t WHERE id = ANY($1::uuid[]) ORDER BY id`, [ids])).rows.map((r) => r.v)))
+    // the investor's file route (Codex group B r1 #4): two deals of other leads with the same document bytes; an investor of the
+    // first downloads its document
+    const bytes = await onePagePdf()
+    const fLead = await person(unique('flead'))
+    const [mineDeal, theirsDeal] = [await liveDealWithPdf(fLead, bytes), await liveDealWithPdf(await person(unique('fvlead')), bytes)]
+    const [mine, theirs] = [{ id: mineDeal, file: await dealDoc(mineDeal) }, { id: theirsDeal, file: await dealDoc(theirsDeal) }]
+    expect(await one('SELECT count(DISTINCT sha256)::text AS v FROM stored_file WHERE id = ANY($1::uuid[])', [[mine.file, theirs.file]])).toBe('1')
+    const reader = (await investor(mine.id, { leader: fLead })).u
+    const ownDoc = await inject('GET', `/api/my/deals/${mine.id}/files/${mine.file}`, reader)
+    expect(ownDoc.statusCode, ownDoc.body.slice(0, 160)).toBe(200)
+    expect(ownDoc.headers['content-type']).toBe('application/pdf')
+    const before = await snapshot()
+    const audits = () => count('SELECT count(*) AS n FROM audit', [])
+    const auditsBefore = await audits()
+    const secrets = [x.u.email, waiting.u.email, vEmail, 'vic.pipe@example.test', 'Friday at ten.', 'Pat Party', 'pat.party@example.test', 'passport.pdf']
+    const leaks = (body: string) => secrets.filter((v) => body.includes(v))
+    const wrong: string[] = []
+    const expectRefused = (what: string, res: { statusCode: number; body: string }, listed?: string) => {
+      if (!ownerRefusal(res, listed)) wrong.push(`${what}: ${res.statusCode} ${res.body.slice(0, 160)}`)
+      expect(leaks(res.body), what).toEqual([])
+    }
+
+    // 1. every child route: the caller's own parent, the victim's child. A person id (:user) names no record of the deal and is
+    // left to the matrix above. Where the lookup by both ids ends in another answer, that answer is listed with why.
+    const INVESTOR_FILE = 'GET /api/my/deals/:id/files/:file'
+    const CHILD_REFUSAL: Record<string, string> = {
+      // the update finds no row of this entity, so no address is found to write to
+      'POST /api/entities/:id/parties/:party/link': 'This person has no email address.',
+      // the revoke finds no open link of this syndicate with that id
+      'POST /api/syndicates/:id/invites/:invite/revoke': 'That link is not active.',
+      // the switch-off finds no link of this deal still on
+      'POST /api/deals/:id/links/:link/disable': 'This link is already off.',
+    }
+    const probes = plan({ deal: aDeal, p: kid.pid, entity: parent.entities!, file: kycFile, syndicate: parent.syndicates!, link: aLink, invitation: aInvitation, entry: aEntry, dealFile: kid.file, user: aLead.id })
+    const childRoutes = table().filter((r) => r.gate !== 'public' && !isStaffGate(r.gate) && /\/:(?!id\b|currency\b|user\b)[a-z]+/.test(r.url))
+    expect(childRoutes.length).toBeGreaterThanOrEqual(18)
+    const tried = new Set<string>()
+    for (const r of childRoutes) {
+      const m = r.method.replace('GET,HEAD', 'GET')
+      const url = r.url.replace(/\/([a-z-]+)\/:([a-z]+)/g, (_x, seg: string, param: string) =>
+        `/${seg}/${param === 'id' ? parent[seg]! : (kid as Record<string, string>)[param]!}`,
+      )
+      expect(url, r.url).not.toMatch(/undefined|:/)
+      const entry = probes[routeKey(m, r.url)]
+      let body = entry && 'body' in entry ? entry.body : m === 'GET' || m === 'DELETE' ? undefined : {}
+      // the steps before the owner check pass on the attacker's side: the deal's own version, and a deal that can be edited
+      if (r.url.endsWith('/terms')) body = { ...(body as object), base_version: aApproved }
+      const at = routeKey(m, r.url) === 'DELETE /api/deals/:id/files/:file' ? url.replace(aDeal, aDraft) : url
+      for (const k of Object.keys(kid)) if (r.url.includes(`/:${k}`)) tried.add(k)
+      if (routeKey(m, r.url) === INVESTOR_FILE) continue // tried below, as an invited investor
+      expectRefused(`${m} ${r.url}`, await inject(m, at, aLead, body), CHILD_REFUSAL[routeKey(m, r.url)])
+    }
+    expect([...tried].sort()).toEqual(Object.keys(kid).sort())
+    // the investor's file route as that investor, past the gate: the other deal's document has the same bytes, so only the deal
+    // the file belongs to tells them apart
+    expect(childRoutes.map((r) => routeKey(r.method.replace('GET,HEAD', 'GET'), r.url))).toContain(INVESTOR_FILE)
+    expectRefused(`${INVESTOR_FILE}, a file of another deal with the same bytes`, await inject('GET', `/api/my/deals/${mine.id}/files/${theirs.file}`, reader))
+
+    // 2. every id a body takes, given someone else's
+    const q = (await inject('POST', `/api/my/deals/${aDeal}/quote`, aInvestor.u, { commitment_minor: '1000000' })).json()
+    expectRefused(
+      'commit with another person’s entity',
+      await inject('POST', `/api/my/deals/${aDeal}/commit`, aInvestor.u, { entity_id: x.entity, commitment_minor: '1000000', quoted_due_minor: q.due_minor, terms_link_id: q.terms_link_id }),
+    )
+    expectRefused(
+      'bank proof that is another person’s KYC file',
+      await inject('POST', `/api/entities/${parent.entities}/bank`, aLead, {
+        holder: 'Fay Fictional',
+        account_fields: { sort_code: '11-22-33', account_number: '12345678' },
+        evidence_file: kycFile,
+      }),
+      'That proof is not a file of this entity.',
+    )
+    const pack = (
+      await t.owner.query<{ content: { assessment: { questions: Array<{ id: string; correct_option: number }> } } }>(
+        'SELECT r.content FROM regime_pack r JOIN instance_profile i ON i.active_pack_id = r.id',
+      )
+    ).rows[0]!.content
+    const right = Object.fromEntries(vAttempt.questions.map((qq) => [qq.id, pack.assessment.questions.find((y) => y.id === qq.id)!.correct_option]))
+    expectRefused(
+      'answers to another person’s open assessment',
+      await inject('POST', '/api/eligibility/assessment/answer', aQualifying, { attempt_id: vAttempt.id, answers: right }),
+      'No such assessment open.',
+    )
+    expect(own.id).not.toBe(vAttempt.id)
+    const choose = 'Choose a link that is in use and allowed by the current settings.'
+    expectRefused('an invitation sent on another deal’s link', await inject('POST', `/api/deals/${aDeal}/targeted`, aLead, { email: unique('atarget'), link_id: vLink }), choose)
+    expectRefused('an own invitation moved to another deal’s link', await inject('POST', `/api/deals/${aDeal}/invitations/${aInvitation}/link`, aLead, { link_id: vLink }), choose)
+    expectRefused(
+      'a message to another deal’s investor',
+      await inject('POST', `/api/deals/${aDeal}/mail`, aLead, { subject: 'Hi', body: 'Hello', to: { invitation_id: vInvitation } }),
+    )
+    const preview = await inject('POST', `/api/deals/${aDeal}/pipeline/preview`, aLead, { entries: [{ id: aEntry, link_id: vLink }] })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(JSON.stringify(preview.json())).toContain('The chosen link is not in use')
+    expect(wrong).toEqual([])
+    expect(await snapshot()).toEqual(before)
+    expect(await audits()).toBe(auditsBefore)
+    expect(await count('SELECT count(*) AS n FROM targeted_invite WHERE invite_link = $1 AND deal_id <> $2', [vLink, vDeal])).toBe(0)
+    expect(await count('SELECT count(*) AS n FROM message WHERE deal_id = $1', [aDeal])).toBe(0)
+
+    // 3. a draft naming another lead's syndicate: saved as words, never submitted into it, and its people untouched
+    const draft = aDraft
+    expect((await inject('PUT', `/api/deals/${draft}/draft`, aLead, { ...base, basics: { ...base.basics, syndicate: { mode: 'existing', id: vSyndicate } } })).statusCode).toBe(200)
+    const submitted = await inject('POST', `/api/deals/${draft}/submit`, aLead, {})
+    expect([submitted.statusCode, submitted.json().error]).toEqual([409, 'Still missing: Syndicate.'])
+    expect(await one('SELECT syndicate_id::text AS v FROM deal WHERE id = $1', [draft])).toBeNull()
+    expect(await count('SELECT count(*) AS n FROM deal_member WHERE deal_id = $1', [draft])).toBe(0)
+    expect(leaks((await inject('GET', `/api/deals/${draft}`, aLead)).body)).toEqual([])
+    expect((await snapshot()).at(-1)).toEqual(before.at(-1))
+  })
+})
+
+describe('the statement after twelve months and its renewal (TC-GATE-03, TC-ELG-03, R-ELG-03, decision R15)', () => {
+  it('TC-GATE-03 / TC-ELG-03 signed through the route: allowed the day before twelve months, refused the day after with own papers still served; renewal re-signs the statement only, no new attempt', async () => {
+    const start = clock
+    try {
+      const ownLead = await person(unique('rlead'))
+      const deal = await liveDeal(ownLead)
+      const { u, entity } = await investor(deal, { leader: ownLead }) // statement signed and test passed through the routes at `start`
+      expect((await commit(u, deal, entity, '1000000')).statusCode).toBe(200)
+      const p = await pid(u, deal)
+      expect((await sign(u, p)).statusCode).toBe(200)
+      expect((await instructions(u, p)).statusCode).toBe(200)
+      const attempts = () => count('SELECT count(*) AS n FROM assessment_attempt WHERE user_id = $1', [u.id])
+      const tests = await attempts()
+      expect(tests).toBe(1)
+      const expires = (await t.owner.query<{ e: Date }>('SELECT expires_at AS e FROM eligibility_statement WHERE user_id = $1', [u.id])).rows[0]!.e
+      const twelve = new Date(start)
+      twelve.setUTCFullYear(twelve.getUTCFullYear() + 1)
+      expect(expires.toISOString()).toBe(twelve.toISOString())
+      const quote = async (who: Client) => (await inject('POST', `/api/my/deals/${deal}/quote`, who, { commitment_minor: '2000000' })).statusCode
+
+      // the day before: still allowed
+      clock = new Date(twelve.getTime() - 86_400_000)
+      let me = await login(u.email)
+      expect((await inject('GET', '/api/eligibility', me)).json().qualified).toBe(true)
+      expect(await quote(me)).toBe(200)
+      // a raise quoted while still allowed, so the day after only the gate can refuse it (Codex group B r1 #6)
+      const raise = { commitment_minor: '2000000', quoted_due_minor: (await inject('POST', `/api/my/deals/${deal}/quote`, me, { commitment_minor: '2000000' })).json().due_minor }
+      expect(raise.quoted_due_minor).toMatch(/^\d+$/)
+
+      // the day after: no new promotion, commitment or signing; what they signed and the payment details they were given stay readable
+      clock = new Date(twelve.getTime() + 86_400_000)
+      me = await login(u.email)
+      expect((await inject('GET', '/api/eligibility', me)).json().qualified).toBe(false)
+      const q = await inject('POST', `/api/my/deals/${deal}/quote`, me, { commitment_minor: '2000000' })
+      expect([q.statusCode, q.json().error]).toEqual([409, NEUTRAL])
+      const raised = await inject('PUT', `/api/my/participations/${p}/commitment`, me, raise)
+      expect([raised.statusCode, raised.json().error]).toEqual([409, NEUTRAL])
+      expect((await inject('GET', `/api/my/participations/${p}/signed`, me)).statusCode).toBe(200)
+      expect((await instructions(me, p)).statusCode).toBe(200)
+
+      // renewal (decision R15): the statement is signed again through the route; the passed test still counts
+      const page = (await inject('GET', '/api/eligibility', me)).json()
+      const net = { category: 'high_net_worth', high_net_worth: { income: { yes: true, amount_minor: '10000000' }, net_assets: { yes: false } } }
+      const renewed = await inject('POST', '/api/eligibility/statement', me, { answers: net, signed_name: 'Fay Fictional', shown_sha256: page.shown_sha256 })
+      expect(renewed.statusCode, renewed.body).toBe(200)
+      const after = (await inject('GET', '/api/eligibility', me)).json()
+      expect(after.qualified, JSON.stringify(after)).toBe(true)
+      expect(await attempts()).toBe(tests)
+      expect((await inject('POST', '/api/eligibility/assessment/start', me)).statusCode).not.toBe(200)
+      expect(await attempts()).toBe(tests)
+      expect(await quote(me)).toBe(200)
+      const next = new Date(clock)
+      next.setUTCFullYear(next.getUTCFullYear() + 1)
+      expect(
+        (await t.owner.query<{ e: Date }>('SELECT max(expires_at) AS e FROM eligibility_statement WHERE user_id = $1', [u.id])).rows[0]!.e.toISOString(),
+      ).toBe(next.toISOString())
+    } finally {
+      clock = start
+    }
+  })
+})
+
+describe('a payment reference clash in the database (TC-REF-01, C-REF-1, R-PAY-02)', () => {
+  /**
+   * The server draws a reference and relies on the UNIQUE `reference_norm` constraint, retrying under a savepoint.
+   * A trigger stands in for chance: the first `clashes` inserts get a reference already in use (a real clash on the real
+   * constraint); the first `other` inserts fail on another unique constraint. It counts with a sequence, which a
+   * savepoint rollback does not undo.
+   */
+  async function withClashes(o: { clashes: number; other: number; taken: string }, run: () => Promise<void>) {
+    await t.owner.query('CREATE SEQUENCE ref_clash_seen')
+    await t.owner.query('CREATE TABLE ref_clash (clashes int NOT NULL, other int NOT NULL, taken text NOT NULL)')
+    await t.owner.query('INSERT INTO ref_clash VALUES ($1, $2, $3)', [o.clashes, o.other, o.taken])
+    await t.owner.query(`CREATE FUNCTION ref_clash() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+      DECLARE n bigint := nextval('ref_clash_seen'); c ref_clash;
+      BEGIN
+        SELECT * INTO c FROM ref_clash;
+        IF n <= c.other THEN RAISE unique_violation USING MESSAGE = 'another unique value', CONSTRAINT = 'participation_other_key'; END IF;
+        IF n <= c.clashes THEN NEW.reference := c.taken; NEW.reference_norm := replace(c.taken, '-', ''); END IF;
+        RETURN NEW;
+      END $$`)
+    await t.owner.query('CREATE TRIGGER ref_clash BEFORE INSERT ON participation FOR EACH ROW EXECUTE FUNCTION ref_clash()')
+    try {
+      await run()
+    } finally {
+      await t.owner.query('DROP TRIGGER ref_clash ON participation')
+      await t.owner.query('DROP FUNCTION ref_clash()')
+      await t.owner.query('DROP TABLE ref_clash')
+      await t.owner.query('DROP SEQUENCE ref_clash_seen')
+    }
+  }
+  const inserts = async () => Number((await t.owner.query<{ n: string }>('SELECT last_value AS n FROM ref_clash_seen')).rows[0]!.n)
+  const refsOf = async (u: Client) =>
+    (await t.owner.query<{ reference: string }>('SELECT reference FROM participation WHERE user_id = $1', [u.id])).rows.map((r) => r.reference)
+
+  async function setUp() {
+    const ownLead = await person(unique('reflead'))
+    const deal = await liveDeal(ownLead)
+    const first = await investor(deal, { leader: ownLead })
+    expect((await commit(first.u, deal, first.entity, '1000000')).statusCode).toBe(200)
+    const [taken] = await refsOf(first.u)
+    const second = await investor(deal, { leader: ownLead })
+    return { deal, taken: taken!, ...second }
+  }
+
+  it('TC-REF-01 a reference already in use draws again: the commitment goes through with a fresh reference, no error', async () => {
+    const { deal, taken, u, entity } = await setUp()
+    await withClashes({ clashes: 2, other: 0, taken }, async () => {
+      const r = await commit(u, deal, entity, '1000000')
+      expect(r.statusCode, r.body).toBe(200)
+      expect(await inserts()).toBe(3) // two clashes, then a fresh draw
+    })
+    const refs = await refsOf(u)
+    expect(refs).toHaveLength(1)
+    expect(refs[0]).not.toBe(taken)
+    expect(refs[0]!.replace('-', '')).not.toBe(taken.replace('-', ''))
+    expect(await count('SELECT count(*) AS n FROM participation WHERE reference_norm = $1', [taken.replace('-', '')])).toBe(1)
+  })
+
+  it('TC-REF-01 a clash every time gives up rather than reuse one: nothing is committed', async () => {
+    const { deal, taken, u, entity } = await setUp()
+    await withClashes({ clashes: 1000, other: 0, taken }, async () => {
+      const r = await commit(u, deal, entity, '1000000')
+      expect(r.statusCode).toBe(500)
+      expect(r.body).not.toContain(taken)
+      expect(await inserts()).toBe(21) // the first draw and 20 more
+    })
+    expect(await refsOf(u)).toEqual([])
+    expect(await count("SELECT count(*) AS n FROM audit WHERE action = 'participation.committed' AND actor_id = $1", [u.id])).toBe(0)
+  })
+
+  it('TC-REF-01 only a clash on the reference draws again: another failure is not retried', async () => {
+    const { deal, taken, u, entity } = await setUp()
+    await withClashes({ clashes: 0, other: 1, taken }, async () => {
+      const r = await commit(u, deal, entity, '1000000')
+      expect(r.statusCode).toBe(500)
+      expect(await inserts()).toBe(1)
+    })
+    expect(await refsOf(u)).toEqual([])
+  })
+})
+
+describe('a pause over what is already under way (TC-CMP-08, R-CMP-01)', () => {
+  /** Committed £10,000; `paid` gets what they are to pay (D) and gives what arrives. */
+  async function committedWith(deal: string, leader: Client, paid: (due: bigint) => bigint) {
+    const x = await investor(deal, { leader })
+    expect((await commit(x.u, deal, x.entity, '1000000')).statusCode).toBe(200)
+    const p = await pid(x.u, deal)
+    const due = BigInt((await t.owner.query<{ d: string }>('SELECT cash_due_minor::text AS d FROM participation WHERE id = $1', [p])).rows[0]!.d)
+    const r = await inject('POST', `/api/review/participations/${p}/receipts`, reviewer, {
+      amount_minor: String(paid(due)),
+      received_on: '2026-11-10',
+      payer_name: 'Fay Fictional',
+      payer_account: '12345678',
+    })
+    expect(r.statusCode, r.body).toBe(200)
+    return { ...x, p, due }
+  }
+  const outcomeOf = async (p: string) => (await t.owner.query<{ outcome: string }>('SELECT outcome FROM participation WHERE id = $1', [p])).rows[0]!.outcome
+  async function pause(level: 'deal' | 'lead', target: string) {
+    const r = await inject('POST', '/api/holds', reviewer, { level, target_id: target, reason: 'Checking' })
+    expect(r.statusCode, r.body).toBe(200)
+    // released when the test ends, passed or failed, so no later test meets the pause (fresh review 6)
+    onTestFinished(async () => {
+      const id = (await inject('GET', '/api/holds', reviewer2)).json().holds.find((h: { target_id: string }) => h.target_id === target).id
+      expect((await inject('POST', `/api/holds/${id}/release`, reviewer2, {})).statusCode).toBe(200)
+    })
+  }
+
+  it('TC-CMP-08 under a deal pause an approved refund is sent and recorded, a new one is prepared, approved and sent, and a withdrawal is asked for and accepted', async () => {
+    // its own lead: the shared one's session has expired this late in the file
+    const lead8 = await person(unique('cmp8-lead'))
+    const deal = await liveDeal(lead8)
+    // overpaid by £1,000: £500 of it prepared and approved before the pause
+    const a = await committedWith(deal, lead8, (due) => due + 100000n)
+    const prep = await inject('POST', `/api/review/participations/${a.p}/refunds`, reviewer, { amount_minor: '50000' })
+    expect(prep.statusCode, prep.body).toBe(200)
+    const refund = prep.json().id as string
+    expect((await inject('POST', `/api/review/refunds/${refund}/approve`, reviewer2, {})).statusCode).toBe(200)
+    const b = await committedWith(deal, lead8, () => 600000n)
+    await pause('deal', deal)
+    // the pause is in force: something new is refused
+    const raised = await change(a.u, deal, a.p, '1100000')
+    expect([raised.statusCode, raised.json().error]).toEqual([409, 'This deal is not available to you at the moment.'])
+    // the approved refund carries on
+    const sent = await inject('POST', `/api/review/refunds/${refund}/sent`, reviewer2, {})
+    expect(sent.statusCode, sent.body).toBe(200)
+    const rec = await inject('POST', `/api/review/participations/${a.p}/refund-records`, reviewer, {
+      refund_id: refund,
+      actual_minor: '50000',
+      sent_on: '2026-11-11',
+    })
+    expect(rec.statusCode, rec.body).toBe(200)
+    expect(rec.json().exceptions).toEqual(['held_meanwhile'])
+    expect(await count("SELECT count(*) AS n FROM refund_payment WHERE id = $1 AND state = 'recorded'", [refund])).toBe(1)
+    // a new refund of the other £500 is prepared, approved and sent during the pause (owner 2026-11-23, option A)
+    const prep2 = await inject('POST', `/api/review/participations/${a.p}/refunds`, reviewer, { amount_minor: '50000' })
+    expect(prep2.statusCode, prep2.body).toBe(200)
+    const refund2 = prep2.json().id as string
+    expect((await inject('POST', `/api/review/refunds/${refund2}/approve`, reviewer2, {})).statusCode).toBe(200)
+    expect((await inject('POST', `/api/review/refunds/${refund2}/sent`, reviewer2, {})).statusCode).toBe(200)
+    expect(await count("SELECT count(*) AS n FROM refund_payment WHERE id = $1 AND state = 'sent'", [refund2])).toBe(1)
+    // a withdrawal is asked for and accepted; the money becomes due back
+    const asked = await inject('POST', `/api/deals/${deal}/participations/${b.p}/withdrawal`, lead8, {
+      consent_confirmed: true,
+      evidence: 'Email from the investor, 10 Nov 2026: "Please take me out of this deal."',
+    })
+    expect(asked.statusCode, asked.body).toBe(200)
+    const ok = await inject('POST', `/api/review/withdrawals/${asked.json().id}/accept`, reviewer, {})
+    expect(ok.statusCode, ok.body).toBe(200)
+    expect(await outcomeOf(b.p)).toBe('withdrawn')
+    const due = (await inject('GET', '/api/review/refunds', reviewer)).json().rows.find((r: { participation_id: string }) => r.participation_id === b.p)
+    expect(due.refund_due_minor).toBe('600000')
+  })
+
+  it('TC-CMP-08 under a lead pause a new commitment is refused, and the lead’s deal can still be cancelled: asked by the lead, confirmed by a reviewer', async () => {
+    const lead8 = await person(unique('cmp8-lead'))
+    const deal = await liveDeal(lead8)
+    const x = await committedWith(deal, lead8, () => 400000n)
+    const y = await investor(deal, { leader: lead8 })
+    await pause('lead', lead8.id)
+    // the pause is in force: a new commitment on the lead's deal is refused
+    const late = await commit(y.u, deal, y.entity, '1000000')
+    expect([late.statusCode, late.json().error]).toEqual([409, 'This deal is not available to you at the moment.'])
+    const ask = await inject('POST', `/api/deals/${deal}/cancel-request`, lead8, { reason: 'The company withdrew' })
+    expect(ask.statusCode, ask.body).toBe(200)
+    const ok = await inject('POST', `/api/review/cancel-requests/${ask.json().id}/confirm`, reviewer, {})
+    expect(ok.statusCode, ok.body).toBe(200)
+    expect(ok.json().state).toBe('cancelled')
+    expect(await outcomeOf(x.p)).toBe('deal_cancelled')
+  })
 })

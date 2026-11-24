@@ -23,6 +23,7 @@
 //   active (§5.2), so the loop over active invitations after it refreshes the same people, now on a cancelled deal.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { execSync, spawn } from 'node:child_process'
+import { mutantsOf, newMutants, picks, touchedTests } from './mutation-select.mjs'
 
 const LIB = 'npx vitest run src/lib/lib.test.ts --reporter=dot'
 const SRV = 'npx vitest run src/server/server.test.ts --reporter=dot'
@@ -66,7 +67,28 @@ const D4LIFEWEB = 'npx playwright test e2e/d4.spec.ts -g "TC-WDR-02" --reporter=
 const D4CHANGEWEB = 'npx playwright test e2e/d4.spec.ts -g "E2E-05" --reporter=dot'
 const D4ALOWEB = 'npx playwright test e2e/d4.spec.ts -g "TC-ALO-01 /" --reporter=dot'
 const D4WORDINGWEB = 'npx playwright test e2e/d4.spec.ts -g "TC-NTF-01 / TC-NTF-03" --reporter=dot'
+const AUTHZMATRIX = 'npx vitest run src/server/d3.test.ts -t "the access matrix" --reporter=dot'
+const RENEWAL = 'npx vitest run src/server/d3.test.ts -t "after twelve months" --reporter=dot'
+const RENEWALROW = 'npx vitest run src/server/d3.test.ts -t "renewed as none of these" --reporter=dot'
+const GATEMATRIX = 'npx vitest run src/server/d3.test.ts -t "route-by-condition gate matrix" --reporter=dot'
+const REFCLASH = 'npx vitest run src/server/d3.test.ts -t "payment reference clash" --reporter=dot'
+const UNTAG = 'npx vitest run scripts/checks.test.ts -t "no case id" --reporter=dot'
+const WORDSRV = 'npx vitest run src/server/d3.test.ts -t "TC-LNK-09 people|TC-PAY-02 the PDF" --reporter=dot'
+const WORDWEB = 'npx playwright test e2e/d3.spec.ts -g "E2E-01 / E2E-02" --reporter=dot'
+const KYCPASSWEB = 'npx playwright test e2e/d1.spec.ts -g "TC-KYC-02 a pass" --reporter=dot'
+const PAUSEDONE = 'npx vitest run src/server/d3.test.ts -t "TC-CMP-08" --reporter=dot'
+const MUTGUARD = 'npx vitest run scripts/checks.test.ts -t "every mutant command with a -t" --reporter=dot'
+const MUTSEL = 'npx vitest run scripts/checks.test.ts -t "mutation --since picks" --reporter=dot'
+const UNKNOWNID = 'npx vitest run scripts/checks.test.ts -t "no row in the test plan" --reporter=dot'
 const D4PIPE = 'npx vitest run src/server/d3.test.ts -t "TC-PIP-02 / TC-PIP-03 one click" --reporter=dot'
+const REACHALL = 'npx vitest run src/server/d3.test.ts -t "TC-LNK-09 someone who passed" --reporter=dot'
+const MATRIXOWN = 'npx vitest run src/server/d3.test.ts -t "every route tried on someone else" --reporter=dot'
+const MATRIXCHILD = 'npx vitest run src/server/d3.test.ts -t "another deal’s records by their own ids" --reporter=dot'
+const TWELVE = 'npx vitest run src/server/d3.test.ts -t "signed through the route: allowed the day before" --reporter=dot'
+const MALFORMED = 'npx vitest run scripts/checks.test.ts -t "a test name with no case id" --reporter=dot'
+const LEGACYOPEN = 'npx vitest run src/server/d1.test.ts -t "TC-ELG-03 an attempt left open on a bank stored with one wording twice" --reporter=dot'
+const PINNED = 'npx vitest run src/server/d1.test.ts -t "TC-ELG-03 an attempt left open across a switch to another version" --reporter=dot'
+const SMALLBANK = 'npx vitest run src/server/d1.test.ts -t "TC-ELG-03 after a switch to a smaller version" --reporter=dot'
 const MUTANTS = [
   ['src/lib/eligibility.ts', 'if (v < t.incomeMinor) meets = false', 'if (false) meets = false', 'income under the threshold accepted', RULES],
   ['src/lib/eligibility.ts', 'if (v < t.netAssetsMinor) meets = false', 'if (false) meets = false', 'net assets under the threshold accepted', RULES],
@@ -80,7 +102,7 @@ const MUTANTS = [
   ['src/lib/eligibility.ts', 'if (a.category === \'neither\') return { qualifies: false, problems }', "if (a.category === 'neither') return { qualifies: false, problems: ['Try another answer.'] }", 'none-of-these suggests another answer', RULES],
   ['src/lib/eligibility.ts', 'failuresIncludingThis >= 2', 'failuresIncludingThis === 2', 'only the second failure locks', RULES],
   ['src/lib/eligibility.ts', 'failuresIncludingThis >= 2', 'failuresIncludingThis >= 3', 'the second failure does not lock', RULES],
-  ['src/lib/eligibility.ts', 'const pool = fresh.length >= size ? fresh : bank', 'const pool = bank', 'a retake repeats the questions', RULES],
+  ['src/lib/eligibility.ts', 'const left = [...fresh]', 'const left = [...bank]', 'a retake repeats the questions', RULES],
   ['src/lib/eligibility.ts', 'Object.hasOwn(answers, id) && answers[id] === q.correct_option', 'answers[id] !== 99', 'any answer passes', RULES],
   ['src/lib/eligibility.ts', 'asked.every((id) => {', 'asked.some((id) => {', 'one right answer is enough', RULES],
   ['src/lib/eligibility.ts', '!!f.statement?.qualifies && f.statement.expiresAt > now && !f.needsReconfirm', '!!f.statement?.qualifies && !f.needsReconfirm', 'an expired statement counts', RULES],
@@ -1585,6 +1607,161 @@ const MUTANTS = [
   ['src/lib/dealSheet.ts', '  } catch {\n    return v\n  }', '  } catch {\n    return null\n  }', 'D4: a stored difference that is not a fee record disappears', D4ST],
   ['src/server/d4Change.ts', "          changes: changesInWords(r.classification.changes, deal.draft.terms?.currency ?? ''),", '          changes: r.classification.changes,', "D4: the lead reads one person's fee change as JSON", D4CH],
   ['src/server/d4Change.ts', "        differences: changesInWords(cr.classification.changes, deal.draft.terms?.currency ?? ''),", '        differences: cr.classification.changes,', "D4: the reviewer reads one person's fee change as JSON", D4CH],
+  // group B T-02, T-11: the route-table access matrix (TC-AUTHZ-01, TC-AUTHZ-02)
+  ['src/server/d3Invest.ts', '`SELECT * FROM participation WHERE id = $1 AND user_id = $2 AND created_at >= ${REAL_SINCE} ${lock', '`SELECT * FROM participation WHERE id = $1 AND $2::uuid IS NOT NULL AND created_at >= ${REAL_SINCE} ${lock', 'T-02: another person reaches a participation by its id', AUTHZMATRIX],
+  ['src/server/d3Lead.ts', 'if (!allowed) throw new Refused(NOT_FOUND)', 'if (false) throw new Refused(NOT_FOUND)', 'T-02: the lead of another deal runs this deal’s lead routes', AUTHZMATRIX],
+  ['src/server/d3Invest.ts', '      if (!ok) throw new Refused(NOT_FOUND)', '      if (false) throw new Refused(NOT_FOUND)', 'T-02: someone never invited downloads a deal file', AUTHZMATRIX],
+  ['src/server/d2Syndicate.ts', "if ((await roleIn(d.db, id, req.user!.id)) !== 'admin') return reply.code(404)", 'if (false) return reply.code(404)', 'T-02: anyone reads a syndicate’s open invitations', AUTHZMATRIX],
+  ['src/server/d1.ts', 'if (!f || (!isOwner && !isReviewer))', 'if (!f)', 'T-11: the lead of the deal downloads the investor’s KYC file', AUTHZMATRIX],
+  // group B T-08, T-09: renewal through the route; the boundary at twelve months
+  ['src/server/d1.ts', 'WHERE a.user_id = $1 AND p.regime = $2 AND a.created_at >= ${LIVE} ORDER BY a.created_at', 'WHERE a.user_id = $1 AND p.regime = $2 AND a.created_at >= ${LIVE} AND a.created_at >= coalesce((SELECT max(s.created_at) FROM eligibility_statement s WHERE s.user_id = a.user_id), \'-infinity\') ORDER BY a.created_at', 'T-08: a renewed statement asks for a new pass (decision R15)', RENEWAL],
+  ['src/lib/eligibility.ts', '!!f.statement?.qualifies && f.statement.expiresAt > now &&', '!!f.statement?.qualifies && f.statement.expiresAt > new Date(now.getTime() + 2 * 86_400_000) &&', 'T-09: the statement stops counting before its twelve months', RENEWAL],
+  // group B T-01: decision R11, a 0 maximum caps at 0 and a 0 threshold charges from the first penny
+  ['src/lib/fees.ts', 'raw > c.max_minor ? c.max_minor : raw', 'raw > c.max_minor && c.max_minor > 0n ? c.max_minor : raw', 'T-01: a maximum of 0 read as uncapped', LIB],
+  ['src/lib/fees.ts', 'base > c.surcharge_threshold_minor ? base - c.surcharge_threshold_minor : 0n', 'c.surcharge_threshold_minor > 0n && base > c.surcharge_threshold_minor ? base - c.surcharge_threshold_minor : 0n', 'T-01: a surcharge threshold of 0 read as no surcharge', LIB],
+  // group B T-03: COBS conditions route by route
+  ['src/lib/eligibility.ts', "return f.coolingOff?.decision === 'continue'", 'return !!f.coolingOff', 'T-03: a COBS cooling-off still running lets the person in', GATEMATRIX],
+  ['src/lib/eligibility.ts', 'return p.steps.slice(0, at).map((s) => s.kind)', "return p.steps.slice(0, at).map((s) => s.kind).filter((k) => k !== 'assessment')", 'T-03: a locked COBS assessment lets the person in', GATEMATRIX],
+  // group B T-04: the server's retry on a reference clash
+  ['src/server/d3Invest.ts', ".constraint !== 'participation_reference_norm_key' || attempt >= 20) throw e", ".constraint !== 'participation_reference_norm_key' || attempt >= 0) throw e", 'T-04: a reference clash is not drawn again', REFCLASH],
+  ['src/server/d3Invest.ts', ".constraint !== 'participation_reference_norm_key' || attempt >= 20) throw e", ".constraint === 'none' || attempt >= 20) throw e", 'T-04: any failure is retried as if it were a clash', REFCLASH],
+  ['src/server/d3Invest.ts', ".constraint !== 'participation_reference_norm_key' || attempt >= 20) throw e", ".constraint !== 'participation_reference_norm_key' || attempt >= 60) throw e", 'T-04: a clash every time keeps drawing far past the limit', REFCLASH],
+  // group B T-06: test names carry their case id
+  ['scripts/check-coverage.mjs', "if (!leadIds(title) && !allow.has(title) && !out.includes(title)) out.push(title)", "if (!leadIds(title) && !out.includes(title)) out.push(title)", 'T-06: the allow-list is ignored', UNTAG],
+  ['scripts/check-coverage.mjs', "if (!leadIds(title) && !allow.has(title) && !out.includes(title)) out.push(title)", "if (!/TC-|E2E-/.test(title) && !allow.has(title) && !out.includes(title)) out.push(title)", 'T-06: an id anywhere in the name counts', UNTAG],
+  ['scripts/check-coverage.mjs', 'return allowed.filter((t) => !seen.has(t))', 'return []', 'T-06: a stale allow-list entry is not reported', UNTAG],
+  // group B T-10: what is already under way carries on under a pause (TC-CMP-08)
+  ["src/server/d4Money.ts", "const after = apply(before, { kind: 'send_refund', refund: id })", "if (await heldNow(c, before)) throw new Refused('Paused.'); const after = apply(before, { kind: 'send_refund', refund: id })", "T-10: an approved refund cannot be sent under a pause", PAUSEDONE],
+  ["src/server/d4Money.ts", "if (BigInt(b.amount_minor) > (m.figures.refundDue ?? 0n))", "if (await heldNow(c, m)) throw new Refused('Paused.'); if (BigInt(b.amount_minor) > (m.figures.refundDue ?? 0n))", "T-10 option A: a new refund cannot be prepared under a pause", PAUSEDONE],
+  ["src/server/d4Money.ts", "const after = apply(before, { kind: 'approve_refund', id, amount: BigInt(r.amount_minor!) })", "if (await heldNow(c, before)) throw new Refused('Paused.'); const after = apply(before, { kind: 'approve_refund', id, amount: BigInt(r.amount_minor!) })", "T-10 option A: a refund cannot be approved under a pause", PAUSEDONE],
+  ["src/server/d3Lead.ts", "'These are reminders only. Do not promote this deal publicly.'", "'These are reminders only.'", "T-16: the reach note says not to promote the deal", WORDSRV],
+  ["src/server/d3Invest.ts", "{ text: `${r.verify_note} ${r.verify_url}`, bold: true }", "{ text: `${r.verify_url}`, bold: true }", "T-18: the PDF says to check the details before paying", WORDSRV],
+  ["src/web/App.tsx", "{notice?.banner && <div className=\"banner\"", "{notice?.banner && !path.startsWith('/invite') && <div className=\"banner\"", "T-12: the sandbox banner is left off the invitation page", WORDWEB],
+  ["src/web/LeadLive.tsx", "setUrl((await api<{ url: string }>(`/api/deals/${dealId}/links/${l.id}/url`)).url))}", "{ const u = (await api<{ url: string }>(`/api/deals/${dealId}/links/${l.id}/url`)).url; setUrl(u); await navigator.clipboard.writeText(u) })}", "T-15: showing a link writes it to the clipboard", WORDWEB],
+  ["src/web/Invest.tsx", "<dd>{ccy(p.held_minor, c)}</dd>", "<dd>{ccy('0', c)}</dd>", "T-19: the deal page leaves out what has arrived", WORDWEB],
+  ["src/web/Investor.tsx", "Document review passed (", "Passed (", "T-22: a pass does not say it was a document review", KYCPASSWEB],
+  ["src/server/d4Life.ts", "const why = withdrawalRefusal({ moneyArrived", "if (activeHold((await dealGateFacts(c, deal)).holds)) throw new Refused('Paused.'); const why = withdrawalRefusal({ moneyArrived", "T-10: a withdrawal cannot be asked for under a pause", PAUSEDONE],
+  ["src/server/d4Life.ts", "if (!(await moneyArrived(c, p.id))) throw new Refused('No money counts", "if (activeHold((await dealGateFacts(c, deal)).holds)) throw new Refused('Paused.'); if (!(await moneyArrived(c, p.id))) throw new Refused('No money counts", "T-10: a withdrawal cannot be accepted under a pause", PAUSEDONE],
+  ["src/server/d4Life.ts", "const why = cancelRequestRefusal(deal.state, { actor: as, payoutException: false })", "if (activeHold((await dealGateFacts(c, deal)).holds)) throw new Refused('Paused.'); const why = cancelRequestRefusal(deal.state, { actor: as, payoutException: false })", "T-10: a cancellation cannot be asked for under a pause", PAUSEDONE],
+  ["src/server/d4Life.ts", "const decision = decideLife(from, 'cancel', {", "if (activeHold((await dealGateFacts(c, deal)).holds)) throw new Refused('Paused.'); const decision = decideLife(from, 'cancel', {", "T-10: a cancellation cannot be confirmed under a pause", PAUSEDONE],
+  // group B fresh review (2026-11-23 triage)
+  ["src/web/LeadLive.tsx", "setUrl((await api<{ url: string }>(`/api/deals/${dealId}/links/${l.id}/url`)).url))}", "{ const u = (await api<{ url: string }>(`/api/deals/${dealId}/links/${l.id}/url`)).url; setUrl(u); setTimeout(() => navigator.clipboard.writeText(u), 400) })}", 'review 4: the link is copied a moment after it is shown', WORDWEB],
+  ["src/web/LeadLive.tsx", "setUrl((await api<{ url: string }>(`/api/deals/${dealId}/links/${l.id}/url`)).url))}", "{ const u = (await api<{ url: string }>(`/api/deals/${dealId}/links/${l.id}/url`)).url; setUrl(u); setTimeout(() => navigator.clipboard.writeText('x'), 400); setTimeout(() => navigator.clipboard.writeText('what the person had copied'), 600) })}", 'review 4: the clipboard is written and put back', WORDWEB],
+  ['src/server/d3Core.ts', "lead: rows.some((r) => r.level === 'lead')", 'lead: false', 'review 6: a lead pause stops nothing new on the lead\'s deal', PAUSEDONE],
+  ['src/server/d3Invest.ts', "until supported\n      if (!inv || !canCommit(person, gate, true)) throw new Refused(NEUTRAL)", "until supported\n      if (!inv) throw new Refused(NEUTRAL)", 'review 3: a commitment is taken whatever the gate says', GATEMATRIX],
+  ["src/server/d4Change.ts", "FROM change_request WHERE id = $1 AND deal_id = $2 FOR UPDATE', [Uuid.parse(req.params.cid)", "FROM change_request WHERE id = $1 AND $2::uuid IS NOT NULL FOR UPDATE', [Uuid.parse(req.params.cid)", "review 1: another deal\u2019s change request withdrawn", AUTHZMATRIX],
+  ["src/server/d4Messages.ts", "FROM message WHERE id = $1 AND deal_id = $2 AND", "FROM message WHERE id = $1 AND $2::uuid IS NOT NULL AND", "review 1: another deal\u2019s message edited or sent", AUTHZMATRIX],
+  ["src/server/d4Life.ts", "WHERE w.id = $1 AND w.deal_id = $2 FOR UPDATE OF w", "WHERE w.id = $1 AND $2::uuid IS NOT NULL FOR UPDATE OF w", "review 1: another deal\u2019s waiting-list place released", AUTHZMATRIX],
+  ["src/server/d3Lead.ts", "FROM targeted_invite WHERE id = $1 AND deal_id = $2 FOR UPDATE", "FROM targeted_invite WHERE id = $1 AND $2::uuid IS NOT NULL FOR UPDATE", "review 1: another deal\u2019s invitation resent", AUTHZMATRIX],
+  ["src/server/d3Lead.ts", "UPDATE pipeline_entry SET removed_at = clock_timestamp() WHERE id = $1 AND deal_id = $2", "UPDATE pipeline_entry SET removed_at = clock_timestamp() WHERE id = $1 AND $2::uuid IS NOT NULL", "review 1: another deal\u2019s list entry removed", AUTHZMATRIX],
+  ["src/server/d3Lead.ts", "token_wrapped_key FROM invite_link WHERE id = $1 AND deal_id = $2'", "token_wrapped_key FROM invite_link WHERE id = $1 AND $2::uuid IS NOT NULL'", "review 1: another deal\u2019s link address shown", AUTHZMATRIX],
+  ["src/server/d3Lead.ts", "disabled_reason = 'lead' WHERE id = $1 AND deal_id = $2 AND disabled_at IS NULL", "disabled_reason = 'lead' WHERE id = $1 AND $2::uuid IS NOT NULL AND disabled_at IS NULL", "review 1: another deal\u2019s link switched off", AUTHZMATRIX],
+  ["src/server/d3Lead.ts", "FROM deal_invitation WHERE id = $1 AND deal_id = $2 AND state = 'active' FOR UPDATE", "FROM deal_invitation WHERE id = $1 AND $2::uuid IS NOT NULL AND state = 'active' FOR UPDATE", "review 1: another deal\u2019s invitation moved to a link", AUTHZMATRIX],
+  ["src/server/d4Life.ts", "if (!p || (dealId && p.deal_id !== dealId)) throw new Refused(NOT_FOUND)", "if (!p || (false && p.deal_id !== dealId)) throw new Refused(NOT_FOUND)", "review 1: another deal\u2019s participation removed, withdrawn or given a new amount", AUTHZMATRIX],
+  ["src/server/d4Change.ts", "ON i.id = p.invitation_id WHERE p.id = $1 AND p.deal_id = $2 FOR UPDATE OF i", "ON i.id = p.invitation_id WHERE p.id = $1 AND $2::uuid IS NOT NULL FOR UPDATE OF i", "review 1: another deal\u2019s participation given new terms", AUTHZMATRIX],
+  ["src/server/d4Panel.ts", "FROM participation WHERE id = $1 AND deal_id = $2 AND created_at >= ${REAL_SINCE}`, [pid, deal.id]", "FROM participation WHERE id = $1 AND $2::uuid IS NOT NULL AND created_at >= ${REAL_SINCE}`, [pid, deal.id]", "review 1: another deal\u2019s signed documents read", AUTHZMATRIX],
+  ["src/server/d2Syndicate.ts", "UPDATE member_invite SET revoked_at = now() WHERE id = $1 AND syndicate_id = $2", "UPDATE member_invite SET revoked_at = now() WHERE id = $1 AND $2::uuid IS NOT NULL", "review 1: another syndicate\u2019s invitation revoked", AUTHZMATRIX],
+  ["src/server/d1.ts", "SET verify_token_hmac = $3 WHERE id = $1 AND entity_id = $2 RETURNING", "SET verify_token_hmac = $3 WHERE id = $1 AND $2::uuid IS NOT NULL RETURNING", "review 1: another entity\u2019s person sent a check link", AUTHZMATRIX],
+  ["src/server/d2Files.ts", "UPDATE stored_file SET removed_at = now() WHERE id = $1 AND owner_id = $2 AND scope = 'deal_shared'", "UPDATE stored_file SET removed_at = now() WHERE id = $1 AND $2::uuid IS NOT NULL AND scope = 'deal_shared'", "review 1: another deal\u2019s file removed", AUTHZMATRIX],
+  ["src/server/d2Files.ts", "size_bytes FROM stored_file WHERE id = $1 AND owner_id = $2 AND scope = 'deal_shared'", "size_bytes FROM stored_file WHERE id = $1 AND $2::uuid IS NOT NULL AND scope = 'deal_shared'", "review 1: another deal\u2019s file downloaded", AUTHZMATRIX],
+  ["src/server/d3Invest.ts", "FROM legal_entity WHERE id = $1 AND owner_user = $2 AND created_at >= ${REAL_SINCE} FOR UPDATE", "FROM legal_entity WHERE id = $1 AND $2::uuid IS NOT NULL AND created_at >= ${REAL_SINCE} FOR UPDATE", "review 1: body: a commitment with another person\u2019s entity", AUTHZMATRIX],
+  ["src/server/d1.ts", "'SELECT 1 FROM stored_file WHERE id = $1 AND owner_id = $2', [b.evidence_file, id]", "'SELECT 1 FROM stored_file WHERE id = $1 AND $2::uuid IS NOT NULL', [b.evidence_file, id]", "review 1: body: bank proof that is another person\u2019s file", AUTHZMATRIX],
+  ["src/server/d1.ts", "WHERE a.id = $1 AND a.user_id = $2 AND", "WHERE a.id = $1 AND $2::uuid IS NOT NULL AND", "review 1: body: answers to another person\u2019s assessment", AUTHZMATRIX],
+  ["src/server/d3Lead.ts", "'SELECT * FROM invite_link WHERE id = $1 AND deal_id = $2', [b.link_id, deal.id]", "'SELECT * FROM invite_link WHERE id = $1 AND $2::uuid IS NOT NULL', [b.link_id, deal.id]", "review 1: body: an invitation moved to another deal\u2019s link", AUTHZMATRIX],
+  ["src/server/d3Lead.ts", "'SELECT * FROM invite_link WHERE id = $1 AND deal_id = $2', [linkId, deal.id]", "'SELECT * FROM invite_link WHERE id = $1 AND $2::uuid IS NOT NULL', [linkId, deal.id]", "review 1: body: an invitation sent on another deal\u2019s link", AUTHZMATRIX],
+  ["src/server/d4Messages.ts", "WHERE i.id = $1 AND i.deal_id = $2 AND i.created_at", "WHERE i.id = $1 AND $2::uuid IS NOT NULL AND i.created_at", "review 1: body: a message to another deal\u2019s investor", AUTHZMATRIX],
+  ["src/server/d3Lead.ts", "'SELECT * FROM invite_link WHERE deal_id = $1', [deal.id]", "'SELECT * FROM invite_link WHERE $1::uuid IS NOT NULL', [deal.id]", "review 1: body: a list entry planned on another deal\u2019s link", AUTHZMATRIX],
+  ["src/server/d2.ts", "WHERE m.user_id = $1 AND m.role = 'admin' AND s.status = 'active'", "WHERE $1::uuid IS NOT NULL AND m.role = 'admin' AND s.status = 'active'", "review 1: body: a draft submitted into another lead\u2019s syndicate", AUTHZMATRIX],
+  ['src/server/d2.ts', '!(await partiesOf(c, deal)).leadUserIds.includes(who.id)) throw new Refused(NOT_FOUND)', 'false) throw new Refused(NOT_FOUND)', 'review 2: another lead’s live deal edited, refused only because it is live', AUTHZMATRIX],
+  ["scripts/mutation-select.mjs", "const re = new RegExp(name)", "const re = /(?:)/", "since by group: every touched test counts whatever the command's name", MUTSEL],
+  ["scripts/mutation-select.mjs", "if (!inner) return 'all'", "if (!inner) continue", "since by group: a change outside every describe touches nothing", MUTSEL],
+  ["scripts/mutation-select.mjs", "const tests = inner.kind === 'test' ? [inner] :", "const tests = true ? [inner] :", "since by group: a describe-level change touches no test of the describe", MUTSEL],
+  ['scripts/check-coverage.mjs', 'return [...results(reports).keys()].filter((id) => !known.has(id))', 'return []', 'review 5: an id with no test-plan row is not reported', UNKNOWNID],
+  ['scripts/check-coverage.mjs', 'const m = new RegExp(String.raw`^\\| (${ID}) \\|`).exec(line)\n    if (m) ids.add(m[1])', 'const m = new RegExp(String.raw`(${ID})`).exec(line)\n    if (m) ids.add(m[1])', 'review 5: a mention in prose counts as a row', UNKNOWNID],
+  // group B Codex round 1 (2026-11-24 triage)
+  ["src/server/d3Lead.ts", "JOIN user_account u ON u.id = i.user_id WHERE i.deal_id = $1\",", "JOIN user_account u ON u.id = i.user_id WHERE i.deal_id = $1 AND i.state = 'active'\",", "r1 1: someone who passed or was withdrawn drops out of the count", REACHALL],
+  ['src/lib/eligibility.ts', 'if (fresh.length < size) return null\n  const left = [...fresh]', 'const left = [...(fresh.length >= size ? fresh : p.assessment.questions.map((q) => q.id))]', 'r1 2: a smaller same-regime bank repeats the failed questions', RULES],
+  ['src/lib/eligibility.ts', 'if (fresh.length < size) return null\n  const left = [...fresh]', 'const left = [...(fresh.length >= size ? fresh : p.assessment.questions.map((q) => q.id))]', 'r1 2: the route repeats the failed questions after a smaller bank', SMALLBANK],
+  ['src/server/d1.ts', "if (!asked) throw new Refused('The assessment is not available yet.')", '', 'r1 2: no retake possible is not a neutral refusal', SMALLBANK],
+  // group B Codex round 2 (2026-11-24 triage)
+  ['src/lib/eligibility.ts', 'bank.filter((q) => !asked.has(promptKey(q.prompt)))', 'bank.filter((q) => !asked.has(promptKey(q.id)))', 'r2 1: a failed question comes back under a new id', RULES],
+  ['src/lib/eligibility.ts', 'bank.filter((q) => !asked.has(promptKey(q.prompt)))', 'bank.filter((q) => !asked.has(promptKey(q.id)))', 'r2 1: the route asks a failed question again under a new id', SMALLBANK],
+  ['src/server/d1.ts', ')).rows[0]!.prompts\n      const asked = pickQuestions', ')).rows[0]!.prompts.slice(0, 0)\n      const asked = pickQuestions', 'r2 1: the route forgets the wording asked last time', SMALLBANK],
+  ['src/lib/regimePack.ts', "\n    .normalize('NFKC')\n", "\n", 'r2 1: a full-width copy of a failed question is new', RULES],
+  ['src/lib/regimePack.ts', "\n    .replace(/\\p{White_Space}+/gu, ' ')\n    .trim()", "\n    .trim()", 'r2 1: other spacing makes a failed question new', RULES],
+  ['src/lib/regimePack.ts', "\n    .toLowerCase()\n    .toUpperCase()\n    .toLowerCase()\n", "\n", 'r2 1: other case makes a failed question new', RULES],
+  ['src/lib/regimePack.ts', "out.push('a question prompt appears twice')", '', 'r2 1: a pack may hold one question twice under two ids', LIB],
+  ['scripts/mutation-select.mjs', " || (c === '/' && AFTER_WORD.test(codeBefore(line, k)))", '', 'r2 3: a regex after return is read as a division and stretches the test', MUTSEL],
+  ['scripts/mutation-select.mjs', "(?:'(?:[^'\\\\]|\\\\.)*'|\"(?:[^\"\\\\]|\\\\.)*\")$/.test(l))", "'[^']*'$/.test(l))", 'r2 4: a command in double quotes makes every mutant new', MUTSEL],
+  ['scripts/checks.test.ts', 'return blocks.some((b: { chain: string[] }) => re.test(fixed(b))) || text', 'return true || text', 'r2 2: a command name found only in an expanded title passes', MUTGUARD],
+  ['scripts/check-coverage.mjs', "/^(?:[-_\\p{L}\\p{N}]|\\s*\\/\\s*(?:TC|E2E)-)/iu.test(", "/^(?:\\s*\\/\\s*(?:TC|E2E)-)/iu.test(", 'r2 11: an id that runs on still earns its case', UNTAG],
+  ['src/server/d2Files.ts', "WHERE id = $1 AND owner_id = $2 AND scope = 'deal_shared' AND removed_at IS NULL\",\n        [file, id],", "WHERE id = $1 AND $2::uuid IS NOT NULL AND removed_at IS NULL\",\n        [file, id],", 'r2 7: the deal\'s file route serves an investor\'s passport to the lead', MATRIXOWN],
+  ['src/server/d2.ts', "WHERE (d.lead_user = $1 OR EXISTS (SELECT 1 FROM deal_member m", "WHERE (d.lead_user = $1 OR EXISTS (SELECT 1 FROM deal_invitation i WHERE i.deal_id = d.id AND i.user_id = $1) OR EXISTS (SELECT 1 FROM deal_member m", 'r2 8: an invited investor sees the deal on the lead\'s list', MATRIXOWN],
+  ["src/server/d3Invest.ts", "const { p, deal, pack, inv } = await ownStep(c, who, Uuid.parse(req.params.id))\n      if (deal.state !== 'live') throw new Refused(PROPOSAL_ENDED)", "const { p, deal, pack, inv } = await ownStep(c, who, Uuid.parse(req.params.id)).catch(async () => { const p = await ownParticipation(c, Uuid.parse(req.params.id), who.id, true); return { p, deal: (await dealById(c, p.deal_id, true))! } as never })\n      if (deal.state !== 'live') throw new Refused(PROPOSAL_ENDED)", "r2 5: accepting a proposal skips the gate", GATEMATRIX],
+  ["src/server/d3Invest.ts", "const { p, deal } = await ownStep(c, who, Uuid.parse(req.params.id))\n      const o = await openProposal", "const { p, deal } = await ownStep(c, who, Uuid.parse(req.params.id)).catch(async () => { const p = await ownParticipation(c, Uuid.parse(req.params.id), who.id, true); return { p, deal: (await dealById(c, p.deal_id, true))! } as never })\n      const o = await openProposal", "r2 5: declining a proposal skips the gate", GATEMATRIX],
+  ["src/server/d3Invest.ts", "const { p, deal, pack, signed } = await ownStep(c, who, Uuid.parse(req.params.id))\n      const rc = await pendingReconfirmation", "const { p, deal, pack, signed } = await ownStep(c, who, Uuid.parse(req.params.id)).catch(async () => { const p = await ownParticipation(c, Uuid.parse(req.params.id), who.id, true); return { p, deal: (await dealById(c, p.deal_id, true))! } as never })\n      const rc = await pendingReconfirmation", "r2 5: agreeing to a reconfirmation skips the gate", GATEMATRIX],
+  ["src/server/d3Invest.ts", "const { p, deal } = await ownStep(c, who, Uuid.parse(req.params.id))\n      const rc = await pendingReconfirmation", "const { p, deal } = await ownStep(c, who, Uuid.parse(req.params.id)).catch(async () => { const p = await ownParticipation(c, Uuid.parse(req.params.id), who.id, true); return { p, deal: (await dealById(c, p.deal_id, true))! } as never })\n      const rc = await pendingReconfirmation", "r2 5: declining a reconfirmation skips the gate", GATEMATRIX],
+  ["src/server/d3Invest.ts", "if (!inv || !canContinueOwnParticipation(person, await ownFacts(c, p, mode), gate)) throw new Refused(NEUTRAL)", "if (!inv || !canContinueOwnParticipation({ ...person, qualified: true }, await ownFacts(c, p, mode), gate)) throw new Refused(NEUTRAL)", "r2 6: a commitment changed by someone renewed as none of these", RENEWALROW],
+  ["src/server/d3Invest.ts", "if (!canContinueOwnParticipation(person, f, gate)) throw new Refused(NEUTRAL)", "if (!canContinueOwnParticipation({ ...person, qualified: true }, f, gate)) throw new Refused(NEUTRAL)", "r2 6: a deal sheet shown to someone renewed as none of these", RENEWALROW],
+  ["src/server/d3Invest.ts", "if (!canSign(person, f, gate, kycFirst(pack))) throw new Refused('This cannot be signed now.')", "if (!canSign({ ...person, qualified: true }, f, gate, kycFirst(pack))) throw new Refused('This cannot be signed now.')", "r2 6: a deal sheet signed by someone renewed as none of these", RENEWALROW],
+  // group B Codex round 3 (2026-11-24 triage)
+  ['src/server/d1.ts', ')).rows[0]!.prompts\n      const asked = pickQuestions', ')).rows[0]!.prompts.slice(1)\n      const asked = pickQuestions', 'r3 8: the route loses one wording asked last time', SMALLBANK],
+  ['src/lib/regimePack.ts', "[\\p{Cf}\\p{Variation_Selector}]", "[\\p{Variation_Selector}]", 'r3 2: an invisible character makes a failed question new', RULES],
+  ['src/lib/regimePack.ts', "[\\p{Cf}\\p{Variation_Selector}]", "[\\p{Variation_Selector}]", 'r3 2: an invisible character lets a pack hold one question twice', LIB],
+  ['src/lib/eligibility.ts', 'return new Set(keys).size === keys.length && keys', 'return keys', 'r3 3: a bank holding one question twice asks it twice', RULES],
+  ['src/server/d1.ts', 'WHERE p.regime = $2 AND a.user_id = $1 AND', 'WHERE $2::text = $2::text AND a.user_id = $1 AND', 'r3 1: a retake reads the wording of another regime\'s attempt', SMALLBANK],
+  ['src/lib/regimePack.ts', "out.push('a question id appears twice')", '', 'r3 9: a pack may hold one id twice', LIB],
+  ['scripts/mutation-select.mjs', ".replace(/\\/\\*.*?\\*\\//g, '')", '', 'r3 5: a comment before a regex hides it', MUTSEL],
+  ['scripts/mutation-select.mjs', '|delete|in|instanceof|', '|delete|in|of|instanceof|', 'r3 5: a name `of` before a division starts a regex', MUTSEL],
+  ['scripts/mutation-select.mjs', '|"(?:[^"\\\\]|\\\\.)*")$/', '|"[^"\\\\]*")$/', 'r3 6: an escaped quote in a command makes every mutant new', MUTSEL],
+  ['scripts/check-coverage.mjs', '/^(?:[-_\\p{L}\\p{N}]|', '/^(?:[-\\w]|', 'r3 10: a full-width digit after an id still earns its case', UNTAG],
+  ['scripts/checks.test.ts', 'return alternatives(name).every((alt) => {', 'return [name].every((alt) => {', 'r3 4: one alternative of a command name vouches for the others', MUTGUARD],
+  ['src/lib/invite.ts', 'ukPeopleNear: c.uk >= 135,', 'ukPeopleNear: c.uk >= 134,', 'r3 11: the UK warning starts at 134', REACHALL],
+  // group B Codex round 4 (2026-11-24 triage)
+  ['src/lib/regimePack.ts', "s\n    .replace(/[\\p{Cf}\\p{Variation_Selector}]/gu, '')\n    .normalize('NFKC')", "s\n    .normalize('NFKC')\n    .replace(/[\\p{Cf}\\p{Variation_Selector}]/gu, '')", 'r4 1: a soft hyphen between a letter and its accent makes a failed question new', RULES],
+  ['src/lib/regimePack.ts', "s\n    .replace(/[\\p{Cf}\\p{Variation_Selector}]/gu, '')\n    .normalize('NFKC')", "s\n    .normalize('NFKC')\n    .replace(/[\\p{Cf}\\p{Variation_Selector}]/gu, '')", 'r4 1: a soft hyphen between a letter and its accent lets a pack hold one question twice', LIB],
+  ['src/lib/regimePack.ts', "\n    .toUpperCase()\n    .toLowerCase()\n    .replace(/[\\u2018", "\n    .replace(/[\\u2018", 'r4 1: ß for ss makes a failed question new', RULES],
+  ['src/lib/regimePack.ts', "\n    .toUpperCase()\n    .toLowerCase()\n    .replace(/[\\u2018", "\n    .replace(/[\\u2018", 'r4 1: ß for ss lets a pack hold one question twice', LIB],
+  ['src/lib/regimePack.ts', ".replace(/\\p{White_Space}+/gu, ' ')", ".replace(/\\s+/gu, ' ')", 'r4 1: a next-line character for a space makes a failed question new', RULES],
+  ['src/lib/regimePack.ts', ".replace(/\\p{White_Space}+/gu, ' ')", ".replace(/\\s+/gu, ' ')", 'r4 1: a next-line character for a space lets a pack hold one question twice', LIB],
+  ['src/lib/eligibility.ts', " && keys.every((k) => k !== '')", '', 'r4 5: a blank prompt fills a place in the set', RULES],
+  ['src/lib/regimePack.ts', "out.push('a question prompt is blank')", '', 'r4 5: a pack may hold a blank prompt', LIB],
+  ['src/server/d1.ts', 'JOIN regime_pack r ON r.id = l.pack_id, jsonb_array_elements', 'JOIN regime_pack r ON r.id = (SELECT active_pack_id FROM instance_profile), jsonb_array_elements', 'r4 6: the route reads last time\'s ids in the active version, so new questions under old ids are left out', SMALLBANK],
+  // group B Codex round 5 (2026-11-24 triage)
+  ['src/lib/regimePack.ts', ".replace(/[\\p{Cf}\\p{Variation_Selector}]/gu, '')", ".replace(/[\\p{Cf}]/gu, '')", 'r5 4: an emoji style selector makes a failed question new', RULES],
+  ['src/lib/regimePack.ts', ".replace(/[\\p{Cf}\\p{Variation_Selector}]/gu, '')", ".replace(/[\\p{Cf}]/gu, '')", 'r5 4: an emoji style selector lets a pack hold one question twice', LIB],
+  ['src/lib/regimePack.ts', ".normalize('NFKC')\n    .toLowerCase()\n    .toUpperCase()", ".normalize('NFKC')\n    .toUpperCase()", 'r5 2: ẞ for ß makes a failed question new', RULES],
+  ['src/lib/regimePack.ts', ".normalize('NFKC')\n    .toLowerCase()\n    .toUpperCase()", ".normalize('NFKC')\n    .toUpperCase()", 'r5 2: ẞ for ß lets a pack hold one question twice', LIB],
+  ['src/lib/regimePack.ts', ".replace(/[\\u2018\\u2019\\u201a\\u201b]/g, \"'\")", '', 'r5: a curly apostrophe makes a failed question new', RULES],
+  ['src/lib/regimePack.ts', ".replace(/[\\u201c\\u201d\\u201e\\u201f]/g, '\"')", '', 'r5: curly quotes let a pack hold one question twice', LIB],
+  ['src/lib/regimePack.ts', ".replace(/[\\u2010-\\u2015\\u2212]/g, '-')", '', 'r5: a typed dash makes a failed question new', RULES],
+  ['src/server/d1.ts', "if (open) return { id: open.id, questions: questionsOf((await packContent(c, open.pack_id))!, open.questions_used) }", "if (open) throw new Refused('The assessment is not available yet.')", 'r5 1: an attempt left open on a legacy bank is refused for good', LEGACYOPEN],
+  ['src/lib/eligibility.ts', 'return new Set(keys).size === keys.length && keys', 'return keys', 'r5 1: the route asks a new set from a bank holding one wording twice', LEGACYOPEN],
+  // group B Codex round 6 (2026-11-24 triage)
+  ['src/server/d1.ts', "if (open) return { id: open.id, questions: questionsOf((await packContent(c, open.pack_id))!, open.questions_used) }", "if (open) return { id: open.id, questions: questionsOf(pack, open.questions_used) }", 'r6 4: an open attempt is shown from the active version', PINNED],
+  ['src/server/d1.ts', "const passed = markAssessment((await packContent(c, a.pack_id))!, a.questions_used, b.answers)", "const passed = markAssessment(pack, a.questions_used, b.answers)", 'r6 4: an open attempt is marked by the active version', PINNED],
+  // group B Codex round 1, findings 3–14 (tests and scripts)
+  ['src/server/d1.ts', 'if (!f || (!isOwner && !isReviewer)) return reply.code(404)', 'if (!f) return reply.code(404)', 'r1 3: anyone reads a KYC file', MATRIXOWN],
+  ['src/server/d3Invest.ts', ' AND owner_id = $2 AND removed_at IS NULL AND sha256 = ANY', ' AND removed_at IS NULL AND $2::uuid IS NOT NULL AND sha256 = ANY', 'r1 4: an investor reads another deal\'s document with the same bytes', MATRIXCHILD],
+  ['src/server/d2.ts', 'WHERE (d.lead_user = $1 OR EXISTS', 'WHERE ($1::uuid IS NOT NULL OR EXISTS', 'r1 5: the deal list shows every deal', MATRIXOWN],
+  ['src/server/d2Syndicate.ts', 'WHERE m.user_id = $1 ORDER BY s.name, s.id', 'WHERE $1::uuid IS NOT NULL ORDER BY s.name, s.id', 'r1 5: the syndicate list shows every syndicate', MATRIXOWN],
+  ['src/server/d3Invest.ts', 'if (!inv || !canContinueOwnParticipation(person, await ownFacts(c, p, mode), gate)) throw new Refused(NEUTRAL)', 'if (!inv) throw new Refused(NEUTRAL)', 'r1 6: a commitment changed whatever the gate says', GATEMATRIX],
+  ['src/server/d3Invest.ts', 'if (!inv || !canContinueOwnParticipation(person, await ownFacts(c, p, mode), gate)) throw new Refused(NEUTRAL)', 'if (!inv) throw new Refused(NEUTRAL)', 'r1 6: a commitment changed after twelve months', TWELVE],
+  ['src/server/d3Invest.ts', 'let ok = canReceivePromotion(person, gate)', 'let ok = true', 'r1 6: a deal document served whatever the gate says', GATEMATRIX],
+  ['src/server/d3Invest.ts', "if (p.outcome !== 'active' || !inv || !canContinueOwnParticipation(person, f, gate)) throw new Refused(NEUTRAL)", "if (p.outcome !== 'active' || !inv) throw new Refused(NEUTRAL)", 'r1 6: proposal and reconfirmation screens whatever the gate says', GATEMATRIX],
+  ['src/server/d3Invest.ts', 'if (canContinueOwnParticipation(person, await ownFacts(c, p, mode), gate)) parts.push(p)', 'parts.push(p)', 'r1 6: updates served whatever the gate says', GATEMATRIX],
+  ['scripts/mutation-select.mjs', '(placeholder.test(t.name) && elsewhere())', 'false', 'r1 7: a test with a placeholder title is skipped when its row is named', MUTSEL],
+  ['scripts/mutation-select.mjs', 'inRows = text.split(\'\\n\').some((l, i) => !titles.has(i + 1) && re.test(l))', 'inRows = text.split(\'\\n\').some((l) => re.test(l))', 'r1 7: another test\'s title counts as a row', MUTSEL],
+  ['scripts/mutation-select.mjs', 'if (text === undefined) return true', 'if (text === undefined) return false', 'r1 7: without the file a placeholder title is skipped', MUTSEL],
+  ['scripts/mutation-select.mjs', 'while (last < lines.length - 1 && after[last] > before[i]) last++', 'while (last < lines.length - 1 && after[last] > before[i] && !/^\\s*[)}]/.test(lines[last])) last++', 'r1 7: a block ends where its parameters close', MUTSEL],
+  ['scripts/mutation-select.mjs', "else if ((c === '/' && /[(,=:[!&|?{};+\\-*%<>~^]/.test(", "else if ((false && /[(,=:[!&|?{};+\\-*%<>~^]/.test(", 'r1 7: a quote in a regex literal throws the block out', MUTSEL],
+  ['scripts/mutation-select.mjs', 'const key = (m) => JSON.stringify(m.slice(0, 5))', 'const key = (m) => JSON.stringify(m[3])', 'r1 8: a mutant known by its label alone', MUTSEL],
+  ['src/server/d3Invest.ts', 'const person: PersonGateFacts = { qualified: isQualified(pack, f, now()), invitationActive: !!inv }', "const person: PersonGateFacts = { qualified: isQualified(pack, { ...f, coolingOff: f.coolingOff && { ...f.coolingOff, decision: 'continue' } }, now()), invitationActive: !!inv }", 'r1 9: the deal gate lets a COBS cooling-off still running through', GATEMATRIX],
+  ['src/server/d3Invest.ts', 'const person: PersonGateFacts = { qualified: isQualified(pack, f, now()), invitationActive: !!inv }', "const person: PersonGateFacts = { qualified: isQualified(pack, pack.regime === 'uk-cobs' ? { ...f, attempts: f.attempts.map((a) => ({ ...a, passed: true })) } : f, now()), invitationActive: !!inv }", 'r1 9: the deal gate lets a locked COBS assessment through', GATEMATRIX],
+  ['src/web/LeadLive.tsx', '{made.url && <span className="mono">{made.url}</span>}', '{made.url && <span className="mono" ref={() => void navigator.clipboard.writeText(made.url!)}>{made.url}</span>}', 'r1 11: Save copies the new link', WORDWEB],
+  ['src/web/Invest.tsx', '<dd>{ccy(p.held_minor, c)}</dd>', '<dd>{ccy(p.due_minor, c)}</dd>', 'r1 12: Received shows the amount due', WORDWEB],
+  ['src/server/d1.ts', 'kyc!.decided_at!.toISOString().slice(0, 10)', 'new Date().toISOString().slice(0, 10)', 'r1 12: the KYC pass shows today', KYCPASSWEB],
+  ['scripts/check-coverage.mjs', 'if (!m || /^(?:[-_\\p{L}\\p{N}]|\\s*\\/\\s*(?:TC|E2E)-)/iu.test(title.slice(m[0].length))) return null', 'if (!m) return null', 'r1 13: a malformed second id passes', MALFORMED],
 ]
 
 let survived = 0
@@ -1609,6 +1786,9 @@ if (arg('check-only') !== undefined) {
  * A mutant's result changes only if its code or its tests change, so this runs: mutants new since <ref>; mutants whose
  * original lies within CONTEXT lines of a line the branch changed; mutants whose tests, or the harness those tests run on,
  * lost or changed a line (an added line cannot weaken a test). Every other mutant is checked with --check-only.
+ * Tests are judged by test group (owner 2026-11-24, rules §3): a changed line inside a test counts for that test, inside a
+ * describe but outside its tests for every test of the describe, outside every describe for the whole file. A mutant whose
+ * command picks tests by name (-t / -g) runs only if one of the changed tests matches that name.
  */
 function sinceSelection(ref) {
   const git = (...a) => execSync(['git', ...a].map((x) => `'${x.replace(/'/g, `'\\''`)}'`).join(' '), { encoding: 'utf8', maxBuffer: 1 << 28 })
@@ -1620,6 +1800,8 @@ function sinceSelection(ref) {
       return ''
     }
   })()
+  // a mutant is new unless the base defines the same file, original, replacement, label and command (a label alone is not unique)
+  const fresh = newMutants(MUTANTS, mutantsOf(baseScript))
   const changedLines = new Map()
   const linesOf = (file) => {
     if (!changedLines.has(file)) {
@@ -1634,13 +1816,34 @@ function sinceSelection(ref) {
     return changedLines.get(file)
   }
   const lostLines = (file) => /^-(?!--)/m.test(git('diff', '-U0', ref, '--', file))
+  /** The tests of a test file that lost or changed a line: lost lines in its old text, the lines that replaced them in the new. */
+  const touched = new Map()
+  const touchedIn = (file) => {
+    if (!touched.has(file)) {
+      let before = ''
+      try {
+        before = git('show', `${ref}:${file}`)
+      } catch {}
+      const [oldLines, newLines] = [[], []]
+      for (const m of git('diff', '-U0', ref, '--', file).matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+        const [a, b, c, d] = [Number(m[1]), m[2] === undefined ? 1 : Number(m[2]), Number(m[3]), m[4] === undefined ? 1 : Number(m[4])]
+        if (!b) continue // only added lines: they cannot weaken a test
+        for (let k = 0; k < b; k++) oldLines.push(a + k)
+        for (let k = 0; k < d; k++) newLines.push(c + k)
+      }
+      const was = before ? touchedTests(before, oldLines) : []
+      const now = touchedTests(readFileSync(file, 'utf8'), newLines)
+      touched.set(file, was === 'all' || now === 'all' ? 'all' : [...was, ...now])
+    }
+    return touched.get(file)
+  }
   const HARNESS = { vitest: ['src/store/testdb.ts', 'vitest.config.ts'], playwright: ['e2e/serve.ts', 'playwright.config.ts'] }
   const harnessChanged = { vitest: HARNESS.vitest.some(lostLines), playwright: HARNESS.playwright.some(lostLines) }
   const out = []
   for (const m of MUTANTS) {
-    const [file, from, , what, cmd] = m
+    const [file, from, , , cmd] = m
     const why = []
-    if (!baseScript.includes(`'${what}'`)) why.push('new')
+    if (fresh.has(m)) why.push('new')
     const text = readFileSync(file, 'utf8')
     const at = text.indexOf(from)
     if (at >= 0) {
@@ -1648,8 +1851,8 @@ function sinceSelection(ref) {
       const last = first + from.split('\n').length - 1
       if (linesOf(file).some(([a, b]) => a <= last + CONTEXT && b >= first - CONTEXT)) why.push('code changed')
     } else why.push('missing')
-    const tests = cmd.match(/(?:src|e2e)\/[\w./-]+\.(?:test|spec)\.ts/g) ?? []
-    if (tests.some(lostLines)) why.push('tests changed')
+    const tests = cmd.match(/(?:src|e2e|scripts)\/[\w./-]+\.(?:test|spec)\.ts/g) ?? []
+    if (tests.some((f) => picks(cmd, touchedIn(f), readFileSync(f, 'utf8')))) why.push('tests changed')
     if (harnessChanged[cmd.includes('playwright') ? 'playwright' : 'vitest']) why.push('harness changed')
     if (why.length) out.push(m)
   }

@@ -7,7 +7,7 @@ const SEEDS = ['Seedling', 'Sam Founder', '300,000', '30000000', 'Cara Carry']
 
 test.beforeEach(dealSetup)
 
-test('E2E-01 / E2E-02 / E2E-03 / TC-X-01 / TC-GATE-05 / TC-LNK-12 a lead makes two links; an investor on a phone goes from the link to payment details, with nothing leaked before the gate and the warning first', async ({
+test('E2E-01 / E2E-02 / E2E-03 / TC-X-01 / TC-GATE-05 / TC-LNK-12 / TC-OP-01 / TC-LNK-02 / TC-PAGE-03 a lead makes two links; an investor on a phone goes from the link to payment details, with nothing leaked before the gate and the warning first', async ({
   browser,
 }) => {
   test.setTimeout(240_000)
@@ -23,10 +23,34 @@ test('E2E-01 / E2E-02 / E2E-03 / TC-X-01 / TC-GATE-05 / TC-LNK-12 a lead makes t
   await form.getByLabel(/^Why these terms differ/).fill('Early backers')
   await form.getByRole('button', { name: 'Check the terms' }).click()
   await expect(form.getByTestId('link-preview')).toContainText('cannot be changed')
+  // TC-LNK-02: the link is shown, and a person copies it; the clipboard is left alone. Seeded and watched before Save, which
+  // already receives the new link (Codex group B r1 #11)
+  await lead.context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await lead.page.evaluate(() => navigator.clipboard.writeText('what the person had copied'))
+  // every way a page can copy is counted from here on, so a copy made after the link appears is caught too (fresh review 4)
+  await lead.page.evaluate(() => {
+    const w = window as unknown as { copies: number }
+    w.copies = 0
+    const cb = navigator.clipboard
+    const [writeText, write, exec] = [cb.writeText.bind(cb), cb.write.bind(cb), document.execCommand.bind(document)]
+    cb.writeText = (t) => (w.copies++, writeText(t))
+    cb.write = (d) => (w.copies++, write(d))
+    document.execCommand = (cmd, ...rest) => (/^(copy|cut)$/i.test(cmd) && w.copies++, exec(cmd, ...rest))
+    document.addEventListener('copy', () => w.copies++, true)
+  })
+  const untouched = async (when: string) => {
+    await lead.page.waitForLoadState('networkidle')
+    await lead.page.waitForTimeout(1000)
+    expect(await lead.page.evaluate(() => (window as unknown as { copies: number }).copies), when).toBe(0)
+    expect(await lead.page.evaluate(() => navigator.clipboard.readText()), when).toBe('what the person had copied')
+  }
   await form.getByRole('button', { name: 'Save these terms' }).click()
   await expect(tools.getByTestId('link-row')).toHaveCount(3)
   const angels = tools.getByTestId('link-row').filter({ hasText: 'Angels' })
+  await untouched('after Save')
   await angels.getByRole('button', { name: 'Show link' }).click()
+  await expect(angels.getByTestId('link-url')).toContainText('/invite?token=')
+  await untouched('after Show link')
   const url = new URL(await angels.getByTestId('link-url').innerText(), 'http://127.0.0.1:4318')
 
   // the investor, on a phone, with every response recorded until the deal page
@@ -49,6 +73,8 @@ test('E2E-01 / E2E-02 / E2E-03 / TC-X-01 / TC-GATE-05 / TC-LNK-12 a lead makes t
   await page.waitForResponse('**/api/instance/notice')
   await expect(page.getByTestId('invite-page')).toBeVisible()
   await page.unroute('**/api/instance/notice')
+  // TC-OP-01: the sandbox banner is on the invitation page too
+  await expect(page.getByTestId('sandbox-banner')).toContainText('fictional data')
   expect(new URL(page.url()).search).toBe('')
   await expect(page).toHaveTitle(/Bulma/)
   await noSideScroll(page)
@@ -111,6 +137,8 @@ test('E2E-01 / E2E-02 / E2E-03 / TC-X-01 / TC-GATE-05 / TC-LNK-12 a lead makes t
   await card.getByRole('button', { name: 'Sign', exact: true }).click()
   const pay = page.getByTestId('instructions')
   await expect(pay.getByTestId('still-to-pay')).toHaveText('Still to pay: £10,400.00')
+  // TC-OP-01: and on the payment details
+  await expect(page.getByTestId('sandbox-banner')).toContainText('fictional data')
   // R-PAY-01: the fee breakdown is on the payment screen, not only in the data
   const parts = pay.getByTestId('pay-breakdown')
   await expect(parts).toContainText('Investment part (before the platform fee)£10,000.00')
@@ -123,16 +151,29 @@ test('E2E-01 / E2E-02 / E2E-03 / TC-X-01 / TC-GATE-05 / TC-LNK-12 a lead makes t
   await pay.getByRole('button', { name: 'I have paid' }).click()
   await expect(pay).toContainText('You said you have paid')
 
-  // the reviewer records the money; the investor sees it
+  // the reviewer records the money in two parts; the investor sees it
   await reviewer.page.goto(`/review/${dealId}`)
   const rec = reviewer.page.getByTestId('receipts')
-  await rec.getByLabel(/^Amount/).fill('10,400')
-  await rec.getByLabel(/^Payer name/).fill('Fay Fictional')
-  await rec.getByLabel(/^Payer account/).fill('12345678')
-  await rec.getByRole('button', { name: 'Record money received' }).click()
-  await expect(rec).toContainText('£10,400.00 on')
+  const receive = async (amount: string) => {
+    await rec.getByLabel(/^Amount/).fill(amount)
+    await rec.getByLabel(/^Payer name/).fill('Fay Fictional')
+    await rec.getByLabel(/^Payer account/).fill('12345678')
+    await rec.getByRole('button', { name: 'Record money received' }).click()
+    await expect(rec).toContainText(`£${amount}.00 on`)
+  }
+  await receive('4,000')
+  await page.reload()
+  // TC-PAGE-03 (R-PAGE-06): after paying part, the deal page shows what was committed and what has arrived; the payment details
+  // show what is left. Three different figures, so a field shown in another's place is caught (Codex group B r1 #12)
+  const paid = page.getByTestId('participation')
+  await expect(paid).toContainText('Total commitment: the amount to pay£10,400.00')
+  await expect(paid).toContainText('Received£4,000.00')
+  await paid.getByRole('button', { name: 'Payment details' }).click()
+  await expect(page.getByTestId('still-to-pay')).toHaveText('Still to pay: £6,400.00')
+  await receive('6,400')
   await page.reload()
   await expect(page.getByTestId('participation')).toContainText('Funded')
+  await expect(page.getByTestId('participation')).toContainText('Received£10,400.00')
   await context.close()
 })
 

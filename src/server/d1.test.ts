@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MemoryStorage } from '../adapters/index.ts'
 import { SumsubKyc } from '../adapters/sumsub.ts'
-import { fillText, type RegimePack } from '../lib/regimePack.ts'
+import { fillText, parsePack, type RegimePack } from '../lib/regimePack.ts'
 import { codeAt, stepOf } from '../lib/totp.ts'
 import { runRetention } from '../maintenance/retention.ts'
 import { tx } from '../store/db.ts'
@@ -1859,6 +1859,135 @@ describe('eligibility', () => {
     await server.close()
     await db.drop()
   })
+  it('TC-ELG-03 after a switch to a smaller version of the same regime, a retake never repeats the failed questions, not even under new ids: none until enough new ones', async () => {
+    const db = await createTestDb()
+    const server = await buildServer({ db: db.app, k: db.keyring, secureCookies: false, now: () => clock })
+    const base = (await db.owner.query<{ content: RegimePack }>("SELECT content FROM regime_pack WHERE key = 'uk-fpo-template'")).rows[0]!.content
+    const owner = (await db.owner.query<{ id: string }>("INSERT INTO user_account (id, email, name, must_change_password) VALUES (gen_random_uuid(), 'o@example.test', 'O', false) RETURNING id")).rows[0]!.id
+    const reg = await server.inject({ method: 'POST', url: '/api/register', remoteAddress: nextIp(), payload: { first_name: 'A', last_name: 'B', email: 'small@example.test', password: PW } })
+    await server.inject({ method: 'POST', url: '/api/verify-email', payload: { token: tokenOf(reg.json().sandbox_link), password: PW } })
+    const l = await server.inject({ method: 'POST', url: '/api/login', remoteAddress: nextIp(), payload: { email: 'small@example.test', password: PW } })
+    const h = { cookie: `bulma_session=${l.cookies.find((c) => c.name === 'bulma_session')!.value}`, 'x-csrf-token': l.json().csrf }
+    const post = (url: string, payload?: object) => server.inject({ method: 'POST', url, headers: h, ...(payload ? { payload } : {}) })
+    // an eight-question bank asks four
+    const eight = [...base.assessment.questions, ...base.assessment.questions.map((q) => ({ ...q, id: `${q.id}-v2`, prompt: `${q.prompt} (second set)` }))]
+    expect(eight.length).toBe(8)
+    const first = await tx(db.app, (c) => insertPack(c, { ...base, key: 'eight-bank', assessment: { ...base.assessment, questions: eight } }, { builtIn: false, by: owner }))
+    await db.owner.query('UPDATE instance_profile SET active_pack_id = $1', [first])
+    await post('/api/eligibility/statement', { answers: NET, signed_name: 'A B' })
+    const a = (await post('/api/eligibility/assessment/start')).json()
+    const asked: string[] = a.questions.map((q: { id: string }) => q.id)
+    expect((await post('/api/eligibility/assessment/answer', { attempt_id: a.id, answers: Object.fromEntries(asked.map((id) => [id, 2])) })).json().passed).toBe(false)
+    // a later attempt under the other regime does not stand in for this regime's last one (Codex group B r3 #1)
+    const cobs = (await db.owner.query<{ id: string; q: string }>("SELECT id, content->'assessment'->'questions'->0->>'id' AS q FROM regime_pack WHERE key = 'uk-cobs-template' ORDER BY version DESC LIMIT 1")).rows[0]!
+    await db.owner.query(
+      "INSERT INTO assessment_attempt (id, user_id, pack_id, questions_used, passed, answered_at, created_at) SELECT gen_random_uuid(), id, $1, $2, false, clock_timestamp(), clock_timestamp() FROM user_account WHERE email = 'small@example.test'",
+      [cobs.id, JSON.stringify([cobs.q])],
+    )
+    // the operator activates a version of the same regime whose bank is just the questions that were failed
+    const only = eight.filter((q) => asked.includes(q.id))
+    expect(only.length).toBe(4)
+    const small = await tx(db.app, (c) => insertPack(c, { ...base, key: 'small-bank', assessment: { ...base.assessment, questions: only } }, { builtIn: false, by: owner }))
+    await db.owner.query('UPDATE instance_profile SET active_pack_id = $1', [small])
+    const r = await post('/api/eligibility/assessment/start')
+    expect(r.statusCode).toBe(409)
+    expect(r.json().error).toBe('The assessment is not available yet.')
+    // the same four filed under new ids, wording in other case and spacing, are still the failed questions
+    const rekeyed = only.map((q) => ({ ...q, id: `${q.id}-new`, prompt: ` ${q.prompt.toUpperCase()}` }))
+    const copies = await tx(db.app, (c) => insertPack(c, { ...base, key: 'rekeyed-bank', assessment: { ...base.assessment, questions: rekeyed } }, { builtIn: false, by: owner }))
+    await db.owner.query('UPDATE instance_profile SET active_pack_id = $1', [copies])
+    const rr = await post('/api/eligibility/assessment/start')
+    expect(rr.statusCode).toBe(409)
+    expect(rr.json().error).toBe('The assessment is not available yet.')
+    // the four copies and two new ones: a set is three, only two are new, so still none; with one of the four wordings lost on
+    // the way, three would look new and the retake would start (Codex group B r3 #8)
+    const twoNew = await tx(db.app, (c) => insertPack(c, { ...base, key: 'two-new-bank', assessment: { ...base.assessment, questions: [...rekeyed, ...eight.filter((q) => !asked.includes(q.id)).slice(0, 2)] } }, { builtIn: false, by: owner }))
+    await db.owner.query('UPDATE instance_profile SET active_pack_id = $1', [twoNew])
+    const r2 = await post('/api/eligibility/assessment/start')
+    expect([r2.statusCode, r2.json().error]).toEqual([409, 'The assessment is not available yet.'])
+    expect((await db.owner.query("SELECT 1 FROM assessment_attempt a JOIN user_account u ON u.id = a.user_id WHERE u.email = 'small@example.test'")).rowCount).toBe(2)
+    // with enough new questions added, the retake asks only those: a full set, none of the failed wording. The new questions carry
+    // the failed ids and the failed wording sits under new ids, so the retake proves it goes by wording alone (Codex group B r4 #6)
+    const fresh = eight.filter((q) => !asked.includes(q.id)).map((q, i) => ({ ...q, id: asked[i]! }))
+    const bigger = await tx(db.app, (c) => insertPack(c, { ...base, key: 'bigger-bank', assessment: { ...base.assessment, questions: [...rekeyed, ...fresh] } }, { builtIn: false, by: owner }))
+    await db.owner.query('UPDATE instance_profile SET active_pack_id = $1', [bigger])
+    const b = await post('/api/eligibility/assessment/start')
+    expect(b.statusCode).toBe(200)
+    const retake: { id: string; prompt: string }[] = b.json().questions
+    expect(retake.map((q) => q.id).sort()).toEqual([...asked].sort())
+    expect(retake.map((q) => q.prompt).sort()).toEqual(fresh.map((q) => q.prompt).sort())
+    expect(retake.filter((q) => only.some((o) => o.prompt.toLowerCase() === q.prompt.trim().toLowerCase()))).toEqual([])
+    await server.close()
+    await db.drop()
+  })
+  it('TC-ELG-03 an attempt left open on a bank stored with one wording twice is handed out as issued; a new set waits for a fixed bank, then comes (Codex group B r4 #2, r5 #1)', async () => {
+    const db = await createTestDb()
+    const server = await buildServer({ db: db.app, k: db.keyring, secureCookies: false, now: () => clock })
+    const base = (await db.owner.query<{ content: RegimePack }>("SELECT content FROM regime_pack WHERE key = 'uk-fpo-template'")).rows[0]!.content
+    const reg = await server.inject({ method: 'POST', url: '/api/register', remoteAddress: nextIp(), payload: { first_name: 'A', last_name: 'B', email: 'legacy@example.test', password: PW } })
+    await server.inject({ method: 'POST', url: '/api/verify-email', payload: { token: tokenOf(reg.json().sandbox_link), password: PW } })
+    const l = await server.inject({ method: 'POST', url: '/api/login', remoteAddress: nextIp(), payload: { email: 'legacy@example.test', password: PW } })
+    const h = { cookie: `bulma_session=${l.cookies.find((c) => c.name === 'bulma_session')!.value}`, 'x-csrf-token': l.json().csrf }
+    const post = (url: string, payload?: object) => server.inject({ method: 'POST', url, headers: h, ...(payload ? { payload } : {}) })
+    await post('/api/eligibility/statement', { answers: NET, signed_name: 'A B' })
+    // a legacy bank A, B, C, C stored as is (insertPack does not check), as the pack check of that time let it through
+    const [qa, qb, qc] = base.assessment.questions
+    const legacy = { ...base, key: 'legacy-bank', assessment: { ...base.assessment, questions: [qa!, qb!, qc!, { ...qc!, id: 'c-copy', prompt: qc!.prompt.toUpperCase() }] } }
+    expect(parsePack(legacy).errors).toContain('a question prompt appears twice')
+    const packId = await tx(db.app, (c) => insertPack(c, legacy, { builtIn: false, by: null }))
+    await db.owner.query('UPDATE instance_profile SET active_pack_id = $1', [packId])
+    // the attempt opened before this release, on A and B
+    const open = (await db.owner.query<{ id: string }>(
+      "INSERT INTO assessment_attempt (id, user_id, pack_id, questions_used) SELECT gen_random_uuid(), id, $1, $2 FROM user_account WHERE email = 'legacy@example.test' RETURNING id",
+      [packId, JSON.stringify([qa!.id, qb!.id])],
+    )).rows[0]!.id
+    const r = await post('/api/eligibility/assessment/start')
+    expect(r.statusCode).toBe(200)
+    expect([r.json().id, r.json().questions.map((q: { id: string }) => q.id)]).toEqual([open, [qa!.id, qb!.id]])
+    // answered as any attempt: one failure, no lock yet
+    const wrong = Object.fromEntries([qa!, qb!].map((q) => [q.id, (q.correct_option + 1) % q.options.length]))
+    expect((await post('/api/eligibility/assessment/answer', { attempt_id: open, answers: wrong })).json()).toMatchObject({ passed: false, locked_until: null })
+    // no new set from that bank: it would ask C twice
+    const none = await post('/api/eligibility/assessment/start')
+    expect([none.statusCode, none.json().error]).toEqual([409, 'The assessment is not available yet.'])
+    // the operator activates a fixed version: the retake comes, without A or B
+    const fixed = await tx(db.app, (c) => insertPack(c, { ...base, key: 'fixed-bank' }, { builtIn: false, by: null }))
+    await db.owner.query('UPDATE instance_profile SET active_pack_id = $1', [fixed])
+    const retake = await post('/api/eligibility/assessment/start')
+    expect(retake.statusCode).toBe(200)
+    const ids: string[] = retake.json().questions.map((q: { id: string }) => q.id)
+    expect(ids.length).toBe(Math.floor(base.assessment.questions.length / 2))
+    expect(ids.filter((id) => id === qa!.id || id === qb!.id)).toEqual([])
+    await server.close()
+    await db.drop()
+  })
+  it('TC-ELG-03 an attempt left open across a switch to another version with the same ids is shown and marked by the version it was issued from (Codex group B r6 #4)', async () => {
+    const db = await createTestDb()
+    const server = await buildServer({ db: db.app, k: db.keyring, secureCookies: false, now: () => clock })
+    const row = (await db.owner.query<{ id: string; content: RegimePack }>("SELECT id, content FROM regime_pack WHERE key = 'uk-fpo-template' ORDER BY version DESC LIMIT 1")).rows[0]!
+    await db.owner.query('UPDATE instance_profile SET active_pack_id = $1', [row.id])
+    const reg = await server.inject({ method: 'POST', url: '/api/register', remoteAddress: nextIp(), payload: { first_name: 'A', last_name: 'B', email: 'pinned@example.test', password: PW } })
+    await server.inject({ method: 'POST', url: '/api/verify-email', payload: { token: tokenOf(reg.json().sandbox_link), password: PW } })
+    const l = await server.inject({ method: 'POST', url: '/api/login', remoteAddress: nextIp(), payload: { email: 'pinned@example.test', password: PW } })
+    const h = { cookie: `bulma_session=${l.cookies.find((c) => c.name === 'bulma_session')!.value}`, 'x-csrf-token': l.json().csrf }
+    const post = (url: string, payload?: object) => server.inject({ method: 'POST', url, headers: h, ...(payload ? { payload } : {}) })
+    await post('/api/eligibility/statement', { answers: NET, signed_name: 'A B' })
+    const a = (await post('/api/eligibility/assessment/start')).json()
+    // in the order the attempt asked them (random)
+    const issued = a.questions.map((x: { id: string }) => row.content.assessment.questions.find((q) => q.id === x.id)!) as RegimePack['assessment']['questions']
+    // the operator activates a version with the same ids, other wording, other options and other right answers
+    const changed = row.content.assessment.questions.map((q) => ({ ...q, prompt: `Changed: ${q.prompt}`, options: q.options.map((o) => `${o} (changed)`), correct_option: (q.correct_option + 1) % q.options.length }))
+    const next = await tx(db.app, (c) => insertPack(c, { ...row.content, key: 'changed-bank', assessment: { ...row.content.assessment, questions: changed } }, { builtIn: false, by: null }))
+    await db.owner.query('UPDATE instance_profile SET active_pack_id = $1', [next])
+    // coming back shows the questions as issued
+    const again = await post('/api/eligibility/assessment/start')
+    expect(again.json()).toEqual({ id: a.id, questions: issued.map((q) => ({ id: q.id, prompt: q.prompt, options: q.options })) })
+    // the answers right under the issuing version pass; under the new one they would all be wrong
+    const r = await post('/api/eligibility/assessment/answer', { attempt_id: a.id, answers: Object.fromEntries(issued.map((q) => [q.id, q.correct_option])) })
+    expect(r.json()).toMatchObject({ passed: true })
+    await server.close()
+    await db.drop()
+  })
   it('TC-ELG-03 the result stands when the neutral notice cannot be sent', async () => {
     const db = await createTestDb()
     const server = await buildServer({ db: db.app, k: db.keyring, secureCookies: false, now: () => clock })
@@ -2147,7 +2276,7 @@ describe('eligibility', () => {
     await server.close()
     await db.drop()
   })
-  it('TC-ELG-06 at the switch to the real mode, nothing done in the sandbox counts any more', async () => {
+  it('TC-ELG-06 / TC-KYC-03 at the switch to the real mode, nothing done in the sandbox counts any more; then a shorter retention and lifting a hold wait for a second admin', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'bulma-d1-pay-'))
     const paymentFile = join(dir, 'p.json')
     writeFileSync(paymentFile, JSON.stringify([{ currency: 'GBP', account_fields: { sort_code: '11-22-33', account_number: '12345678' }, holder: 'H Ltd', holder_capacity: 'C', holder_frn: null, asserted_client_money: true, your_money_text_key: 'your_money', refund_days: 10, receipt_check_note: 'n' }]))

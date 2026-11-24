@@ -88,7 +88,7 @@ test('TC-OP-02 / TC-OP-03 the switch page lists what is missing and carries the 
   await expect(page.getByTestId('mode')).toHaveText('Sandbox')
 })
 
-test('E2E-D0 phone width has no sideways page scroll', async ({ page }) => {
+test('phone width has no sideways page scroll', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 800 })
   await signInFirst(page)
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
@@ -110,7 +110,7 @@ test('TC-KYC-03 a setting left blank is an error, not a zero: retention periods 
   await expect(page.getByRole('alert')).toContainText('whole number')
 })
 
-test('E2E-D0 approving a change shows at once on the page, with what is being approved beside the button', async ({ page }) => {
+test('TC-OP-04 approving a change shows at once on the page, with what is being approved beside the button', async ({ page }) => {
   await signInFirst(page)
   await expect(page.getByTestId('active-pack')).toContainText('uk-fpo-template')
   const pack = page.getByRole('listitem').filter({ hasText: 'uk-cobs-template' }).last()

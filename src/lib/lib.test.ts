@@ -18,13 +18,20 @@ describe('fees', () => {
     expect(platformFee({ ...ZERO, min_minor: 4000n * POUND, max_minor: 20000n * POUND }, 100000n * POUND)).toBe(4000n * POUND)
     expect(feeConfigErrors({ ...ZERO, min_minor: 5n, max_minor: 5n })).toEqual([])
   })
-  it('C-FEE-2 worked examples', () => {
+  it('TC-FEE-10 decision R11: a maximum of 0 caps the fee at 0, not uncapped; a surcharge threshold of 0 charges from the first penny', () => {
+    expect(platformFee({ ...ZERO, rate_bps: 250 }, 100000n * POUND)).toBe(0n)
+    // 2.5% of £100,000 = £2,500, plus 0.1% of the whole £100,000 = £100
+    expect(platformFee({ ...ZERO, rate_bps: 250, max_minor: 20000n * POUND, surcharge_bps: 10 }, 100000n * POUND)).toBe(2600n * POUND)
+    // £10 at 0.1% is 1p: the first penny above a 0 threshold counts, and a 0 maximum does not cap the surcharge
+    expect(platformFee({ ...ZERO, surcharge_bps: 10 }, 1000n)).toBe(1n)
+  })
+  it('TC-FEE-09 C-FEE-2 worked examples', () => {
     expect(platformFee(CONFIG, 100000n * POUND)).toBe(4000n * POUND)
     expect(platformFee(CONFIG, 500000n * POUND)).toBe(12500n * POUND)
     expect(platformFee(CONFIG, 1000000n * POUND)).toBe(20000n * POUND)
     expect(platformFee(CONFIG, 6000000n * POUND)).toBe(21000n * POUND)
   })
-  it('hostile config values are refused', () => {
+  it('TC-FEE-10 hostile config values are refused', () => {
     for (const rate_bps of [-1, 10001, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) expect(feeConfigErrors({ ...ZERO, rate_bps }).length).toBeGreaterThan(0)
     for (const surcharge_bps of [-1, 10001, 0.5]) expect(feeConfigErrors({ ...ZERO, surcharge_bps }).length).toBeGreaterThan(0)
     expect(feeConfigErrors({ ...ZERO, rate_bps: 10000 })).toEqual([])
@@ -39,7 +46,7 @@ describe('fees', () => {
     expect(() => platformFee({ rate_bps: 10000, min_minor: 0n, max_minor: MAX_MINOR, surcharge_threshold_minor: 0n, surcharge_bps: 10000 }, MAX_MINOR)).toThrow(/too large to store/)
     expect(platformFee({ rate_bps: 10000, min_minor: 0n, max_minor: MAX_MINOR, surcharge_threshold_minor: 0n, surcharge_bps: 0 }, MAX_MINOR)).toBe(MAX_MINOR)
   })
-  it('rounding: exact half goes up in each part; base at the threshold has no surcharge', () => {
+  it('TC-FEE-09 rounding: exact half goes up in each part; base at the threshold has no surcharge', () => {
     const open: FeeConfig = { ...ZERO, rate_bps: 250, max_minor: MAX_MINOR }
     expect(platformFee(open, 100n)).toBe(3n) // 2.5
     expect(platformFee(open, 99n)).toBe(2n) // 2.475
@@ -72,7 +79,7 @@ describe('regime packs', () => {
   const fpo = load('uk-fpo-template')
   const cobs = load('uk-cobs-template')
 
-  it('the shipped packs load', () => {
+  it('TC-STAT-03 the shipped packs load', () => {
     expect(parsePack(fpo).errors).toEqual([])
     expect(parsePack(cobs).errors).toEqual([])
   })
@@ -131,7 +138,7 @@ describe('regime packs', () => {
     const renamed = { ...cobs, key: 'my-friendly-pack', assessment: { ...cobs.assessment, enabled: false } }
     expect(invariantViolations(renamed).some((e) => e.startsWith('e:'))).toBe(true)
   })
-  it('hostile packs: junk, extra keys, proto keys, duplicates and bad references are refused without throwing', () => {
+  it('TC-STAT-03 hostile packs: junk, extra keys, proto keys, duplicates and bad references are refused without throwing', () => {
     for (const junk of [null, 1, 'x', [], {}, { key: '__proto__' }]) expect(parsePack(junk).pack).toBeNull()
     expect(parsePack({ ...fpo, extra: 1 }).pack).toBeNull()
     expect(parsePack(JSON.parse(JSON.stringify(fpo).replace('{', '{"__proto__":{"x":1},'))).pack).toBeNull()
@@ -140,7 +147,32 @@ describe('regime packs', () => {
     expect(parsePack({ ...fpo, steps: [...fpo.steps, fpo.steps[0]] }).errors.join()).toContain('appears twice')
     const q = fpo.assessment.questions[0]!
     expect(parsePack({ ...fpo, assessment: { enabled: true, questions: [{ ...q, correct_option: 3 }] } }).errors.join()).toContain('does not exist')
-    expect(parsePack({ ...fpo, assessment: { enabled: true, questions: [q, q] } }).errors.join()).toContain('appears twice')
+    // the same id with another prompt: the id check itself, not the prompt check (Codex group B r3 #9)
+    expect(parsePack({ ...fpo, assessment: { enabled: true, questions: [q, { ...q, prompt: `${q.prompt} (other)` }] } }).errors).toContain('a question id appears twice')
+    // R-ELG-05: the same question under another id, other case and spacing, is the same question
+    const bank = fpo.assessment.questions
+    const copy = { ...q, id: 'copy', prompt: ` ${q.prompt.toUpperCase().replace(/ /g, '  ')} ` }
+    expect(parsePack({ ...fpo, assessment: { ...fpo.assessment, questions: [...bank, copy] } }).errors).toContain('a question prompt appears twice')
+    const hidden = { ...q, id: 'hidden', prompt: q.prompt.replace(' ', '\u00ad \u200b') }
+    expect(parsePack({ ...fpo, assessment: { ...fpo.assessment, questions: [...bank, hidden] } }).errors).toContain('a question prompt appears twice')
+    // the usual copy-paste differences (PRD v0.30; Codex group B r4 #1, r5 #2, #4)
+    for (const [a, b] of [
+      ['Café risk?', 'Cafe\u00ad\u0301 risk?'],
+      ['Straße risk?', 'STRASSE RISK?'],
+      ['Wie groß ist das Risiko?', 'WIE GROẞ IST DAS RISIKO?'],
+      ['Risk level?', 'Risk\u0085level?'],
+      ['\u26a0 What can you lose?', '\u26a0\ufe0f What can you lose?'],
+      ["What's the risk?", 'What\u2019s the risk?'],
+      ['Is it "safe"?', 'Is it \u201csafe\u201d?'],
+      ['Lock-up period?', 'Lock\u2013up period?'],
+    ] as [string, string][]) {
+      const two = [{ ...q, id: 'one', prompt: a }, { ...q, id: 'two', prompt: b }]
+      expect(parsePack({ ...fpo, assessment: { ...fpo.assessment, questions: [...bank, ...two] } }).errors).toContain('a question prompt appears twice')
+    }
+    // Codex group B r4 #5: a prompt of invisible characters only
+    expect(parsePack({ ...fpo, assessment: { ...fpo.assessment, questions: [...bank, { ...q, id: 'blank', prompt: '\u00ad\u200b' }] } }).errors).toContain('a question prompt is blank')
+    expect(parsePack(fpo).errors).not.toContain('a question prompt is blank')
+    expect(parsePack({ ...fpo, assessment: { ...fpo.assessment, questions: [...bank, { ...copy, prompt: `${q.prompt} (again)` }] } }).errors).not.toContain('a question prompt appears twice')
     expect(parsePack({ ...fpo, assessment: { enabled: true, questions: [] } }).errors.join()).toContain('no questions')
     expect(parsePack({ ...fpo, assessment: { enabled: true, questions: [{ ...q, options: ['a', 'b'] }] } }).pack).toBeNull()
     expect(parsePack({ ...fpo, thresholds: { hnw_income_minor: 1, hnw_net_assets_minor: '1' } }).pack).toBeNull()
@@ -162,7 +194,7 @@ describe('regime packs', () => {
       expect(p.author_note.known_open_questions.length).toBeGreaterThan(0)
     }
   })
-  it('placeholders are found in legal text and in questions', () => {
+  it('TC-OP-02 placeholders are found in legal text and in questions', () => {
     const p = parsePack(fpo).pack!
     const all = placeholderTexts(p)
     expect(all).toContain('your_money')
@@ -237,7 +269,7 @@ describe('instance rules', () => {
     expect(approvalRefusal({ ...base, approver: 'b', approverIsAdmin: false, mode: 'real', adminCount: 2 })).toMatch(/Only an admin/)
     expect(isSingleAdminException({ ...base, approverIsAdmin: false, mode: 'sandbox', adminCount: 1 })).toBe(false)
   })
-  it('role changes cannot break the separation or remove the last admin', () => {
+  it('TC-OP-02 role changes cannot break the separation or remove the last admin', () => {
     expect(roleChangeRefusal('sandbox', [])).toMatch(/at least one admin/)
     expect(roleChangeRefusal('sandbox', [A])).toBeNull()
     expect(roleChangeRefusal('real', [A, B, R])).toBeNull()
@@ -294,7 +326,7 @@ describe('audit chain', () => {
   }
   const one = rec(1, GENESIS)
   const two = rec(2, one.hash)
-  it('finds every kind of break', () => {
+  it('TC-AUD-01 finds every kind of break', () => {
     expect(verifyChain([one, two])).toEqual({ ok: true, count: 2 })
     expect(verifyChain([])).toEqual({ ok: true, count: 0 })
     expect(verifyChain([two])).toEqual({ ok: false, badSeq: 2 })
@@ -303,7 +335,7 @@ describe('audit chain', () => {
     expect(verifyChain([one, { ...two, software_version: '9' }])).toEqual({ ok: false, badSeq: 2 })
     expect(verifyChain([{ ...one, prev_hash: 'x'.repeat(64) }])).toEqual({ ok: false, badSeq: 1 })
   })
-  it('finds a record rewritten with a fresh hash, and a record removed with the next one re-linked', () => {
+  it('TC-AUD-01 finds a record rewritten with a fresh hash, and a record removed with the next one re-linked', () => {
     const three = rec(3, two.hash)
     const { hash: _old, ...body } = two
     const forged = { ...body, action: 'forged', hash: auditHash({ ...body, action: 'forged' }) }

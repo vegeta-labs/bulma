@@ -1217,8 +1217,21 @@ export function registerD1(app: FastifyInstance, d: D1Deps) {
         `SELECT a.id, a.questions_used, a.pack_id FROM assessment_attempt a JOIN regime_pack p ON p.id = a.pack_id WHERE a.user_id = $1 AND p.regime = $2 AND a.passed IS NULL AND a.created_at >= ${LIVE} ORDER BY a.created_at DESC LIMIT 1`,
         [req.user!.id, pack.regime],
       )).rows[0]
+      // handed out as it was issued, also from a bank stored before the pack check (Codex group B r5 #1: refusing it left the
+      // investor with no way on, even after the operator fixed the bank); a new set from such a bank is refused by pickQuestions
       if (open) return { id: open.id, questions: questionsOf((await packContent(c, open.pack_id))!, open.questions_used) }
-      const asked = pickQuestions(pack, f.attempts, (n) => randomBytes(4).readUInt32BE(0) % n)
+      // R-ELG-05: the wording of the latest attempt's questions, from the version it was asked from (only here, not on every read)
+      const lastAsked = (await c.query<{ prompts: string[] }>(
+        `SELECT coalesce(jsonb_agg(q->>'prompt'), '[]'::jsonb) AS prompts
+           FROM (SELECT a.questions_used, a.pack_id FROM assessment_attempt a JOIN regime_pack p ON p.id = a.pack_id
+                  WHERE p.regime = $2 AND a.user_id = $1 AND a.created_at >= ${LIVE} ORDER BY a.created_at DESC LIMIT 1) l
+           JOIN regime_pack r ON r.id = l.pack_id, jsonb_array_elements(r.content->'assessment'->'questions') q
+          WHERE l.questions_used ? (q->>'id')`,
+        [req.user!.id, pack.regime],
+      )).rows[0]!.prompts
+      const asked = pickQuestions(pack, lastAsked, (n) => randomBytes(4).readUInt32BE(0) % n)
+      // R-ELG-05: the active version has too few questions not asked last time; the operator adds some, nothing is repeated
+      if (!asked) throw new Refused('The assessment is not available yet.')
       const id = randomUUID()
       await c.query('INSERT INTO assessment_attempt (id, user_id, pack_id, questions_used) VALUES ($1, $2, $3, $4)', [id, req.user!.id, packId, JSON.stringify(asked)])
       return { id, questions: questionsOf(pack, asked) }

@@ -2,7 +2,7 @@
 // passed in. Only rules live here; every word shown to a person comes from the pack.
 import { z } from 'zod'
 import { minorToPounds } from './pounds.ts'
-import { hasDefaultWording, thresholds, type RegimePack, type StepKind } from './regimePack.ts'
+import { hasDefaultWording, promptKey, thresholds, type RegimePack, type StepKind } from './regimePack.ts'
 
 const yesNoText = z.discriminatedUnion('yes', [
   z.strictObject({ yes: z.literal(false) }),
@@ -96,14 +96,26 @@ export interface AttemptFact {
 
 export const LOCK_HOURS = 24
 
-/** R-ELG-05: half the bank rounded down, at least one, so with two or more questions a retake is always a wholly new set. */
-export function pickQuestions(p: Pick<RegimePack, 'assessment'>, attempts: readonly AttemptFact[], random: (n: number) => number): string[] {
-  const bank = p.assessment.questions.map((q) => q.id)
+/** R-ELG-05: half the bank rounded down, at least one; a retake is always a wholly new set. A question is its wording (promptKey),
+ * not its id: `lastAsked` is the wording of the questions asked in the latest attempt, read from the version they were asked
+ * from, so a question re-filed under a new id is still asked and a new question under an old id is new.
+ * No set (null) when the bank is not askable (bankAskable) or, after a switch to
+ * another version of the same regime, when it holds too few questions not asked last time: never a repeat. */
+/** R-ELG-05: a bank stored before the pack check refused it may hold one wording twice or a prompt with nothing to read; no new
+ * set is asked from it. An attempt already issued from it is handed out and marked as any other (Codex group B r5 #1). */
+export function bankAskable(p: Pick<RegimePack, 'assessment'>): boolean {
+  const keys = p.assessment.questions.map((q) => promptKey(q.prompt))
+  return new Set(keys).size === keys.length && keys.every((k) => k !== '')
+}
+
+export function pickQuestions(p: Pick<RegimePack, 'assessment'>, lastAsked: readonly string[], random: (n: number) => number): string[] | null {
+  const bank = p.assessment.questions
+  if (!bankAskable(p)) return null
   const size = Math.max(1, Math.floor(bank.length / 2))
-  const last = new Set(attempts.at(-1)?.questions ?? [])
-  const fresh = bank.filter((id) => !last.has(id))
-  const pool = fresh.length >= size ? fresh : bank
-  const left = [...pool]
+  const asked = new Set(lastAsked.map(promptKey))
+  const fresh = bank.filter((q) => !asked.has(promptKey(q.prompt))).map((q) => q.id)
+  if (fresh.length < size) return null
+  const left = [...fresh]
   const out: string[] = []
   while (out.length < size && left.length) out.push(left.splice(random(left.length), 1)[0]!)
   return out

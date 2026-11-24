@@ -105,7 +105,7 @@ afterAll(async () => {
 })
 
 describe('sign-in and sessions', () => {
-  it('a temporary password can only change the password', async () => {
+  it('TC-ACC-02 a temporary password can only change the password', async () => {
     expect((await call('GET', '/api/instance', first)).statusCode).toBe(403)
     expect((await call('GET', '/api/session', first)).statusCode).toBe(200)
     expect((await call('POST', '/api/password', first, { current: 'wrong-wrong-wrong', next: 'another-long-password' })).statusCode).toBe(400)
@@ -283,7 +283,7 @@ describe('routes', () => {
     expect(bad.status).toBe(1)
     expect(bad.stdout).toContain('/api/forgot-to-declare')
   })
-  it('every route has a gate, and only the listed ones are public', async () => {
+  it('TC-AUTHZ-07 every route has a gate, and only the listed ones are public', async () => {
     const a = app as FastifyInstance & { routeTable: Array<{ url: string; gate: string }> }
     expect(a.routeTable.length).toBeGreaterThan(10)
     expect(new Set(a.routeTable.filter((r) => r.gate === 'public').map((r) => r.url))).toEqual(new Set(['/api/health', '/api/instance/notice', '/api/login', '/api/register', '/api/verify-email', '/api/password/forgot', '/api/password/reset', '/api/account/email/confirm', '/api/party-links/confirm', '/api/kyc/webhook/:provider', '/api/investee/view', '/api/investee/files', '/api/investee/files/remove', '/api/investee/submit', '/api/invite/open', '/api/invite/pending', '/api/instructions/verify', '/api/complaints/channel']))
@@ -303,7 +303,7 @@ describe('routes', () => {
     expect((await get('/api/instance')).statusCode).toBe(401)
     await s.close()
   })
-  it('an unsigned caller gets nothing from any non-public route; a non-admin nothing from an admin route', async () => {
+  it('TC-AUTHZ-01 an unsigned caller gets nothing from any non-public route; a non-admin nothing from an admin route', async () => {
     const a = app as FastifyInstance & { routeTable: Array<{ method: string; url: string; gate: string }> }
     const plain = await person('plain@example.test', [])
     for (const r of a.routeTable.filter((x) => x.gate !== 'public')) {
@@ -348,7 +348,7 @@ describe('sandbox', () => {
     expect(selectAdapters('real', t.app, { mailer: real }).mailer).toBe(real)
     expect(() => selectAdapters('real', t.app).mailer.send({ to: '', subject: '', body: '' })).toThrow(/no mail adapter/)
   })
-  it('adapters: fakes behave, and local storage stays inside its folder', async () => {
+  it('TC-OP-01 adapters: fakes behave, and local storage stays inside its folder', async () => {
     const s = new LocalStorage(paymentDir)
     await s.put('a/b.txt', Buffer.from('x'))
     expect((await s.get('a/b.txt'))!.toString()).toBe('x')
@@ -501,7 +501,7 @@ describe('switching to the real mode', () => {
     expect((await call('POST', `/api/requests/${req}/approve`, second)).statusCode).toBe(409)
     expect((await call('POST', '/api/requests/pack-activate', first, { pack_id: packId })).statusCode).toBe(409)
   })
-  it('a stale request is refused: it was asked of an instance that has since changed', async () => {
+  it('TC-OP-02 a stale request is refused: it was asked of an instance that has since changed', async () => {
     const older = (await call('POST', '/api/requests/profile', first, { ...SWITCH, accountable_person: 'Older Answer' })).json().id
     const newer = (await call('POST', '/api/requests/profile', first, { ...SWITCH, accountable_person: 'Newer Answer' })).json().id
     expect((await call('POST', `/api/requests/${newer}/approve`, second)).statusCode).toBe(200)
@@ -510,7 +510,7 @@ describe('switching to the real mode', () => {
     expect(stale.json().error).toMatch(/changed after this was asked/)
     expect((await call('GET', '/api/instance', first)).json().accountable_person).toBe('Newer Answer')
   })
-  it('a pack flipping its placeholder flag with the shipped words still in it cannot reach the real mode', async () => {
+  it('TC-OP-02 a pack flipping its placeholder flag with the shipped words still in it cannot reach the real mode', async () => {
     const p = readBuiltInPacks().find((x) => x.key === 'uk-fpo-template')!
     const sly = { ...p, key: 'sly-pack', legal_texts: p.legal_texts.map((x) => ({ ...x, is_placeholder: false })), assessment: { ...p.assessment, questions: p.assessment.questions.map((q) => ({ ...q, is_placeholder: false })) } }
     const id = (await call('POST', '/api/packs', first, sly)).json().id
@@ -522,7 +522,7 @@ describe('switching to the real mode', () => {
     const undo = (await call('POST', '/api/requests/pack-activate', first, { pack_id: back })).json().id
     expect((await call('POST', `/api/requests/${undo}/approve`, second)).statusCode).toBe(200)
   })
-  it('a pack stored under older rules is judged by today\'s rules on activation and on the switch', async () => {
+  it('TC-OP-04 a pack stored under older rules is judged by today\'s rules on activation and on the switch', async () => {
     const p = fullPack('old-rules')
     const id = '11111111-1111-4111-8111-111111111111'
     const weak = { ...p, steps: p.steps.map((x) => ({ ...x, qualifying: false })) }
@@ -531,7 +531,7 @@ describe('switching to the real mode', () => {
     expect(r.statusCode).toBe(409)
     expect(r.json().error).toMatch(/no longer passes the format check/)
   })
-  it('payment file: a broken one says so, and a missing one says configure', async () => {
+  it('TC-OP-02 payment file: a broken one says so, and a missing one says configure', async () => {
     writeFileSync(paymentFile, '{broken')
     expect((await call('GET', '/api/instance', first)).json().blockers.map((b: { message: string }) => b.message).join()).toMatch(/documented format/)
     writeFileSync(paymentFile, JSON.stringify([{ ...PAYMENT[0], holder: '' }]))
@@ -542,7 +542,7 @@ describe('switching to the real mode', () => {
     expect(res.json().blockers.map((b: { message: string }) => b.message).join()).toMatch(/Configure the payment instructions/)
     await none.close()
   })
-  it('two uploads at once cannot give one pack two regimes', async () => {
+  it('TC-OP-04 two uploads at once cannot give one pack two regimes', async () => {
     const cobs = readBuiltInPacks().find((p) => p.key === 'uk-cobs-template')!
     const rs = await Promise.all([
       call('POST', '/api/packs', first, fullPack('same-pack')),
@@ -551,7 +551,7 @@ describe('switching to the real mode', () => {
     expect(rs.map((r) => r.statusCode).sort()).toEqual([200, 409])
     expect(new Set((await t.owner.query<{ regime: string }>("SELECT regime FROM regime_pack WHERE key = 'same-pack'")).rows.map((r) => r.regime)).size).toBe(1)
   })
-  it('a "your money" panel only under an unreachable variant does not count', async () => {
+  it('TC-STAT-03 a "your money" panel only under an unreachable variant does not count', async () => {
     const p = fullPack('hidden-panel')
     const hidden = { ...p, legal_texts: p.legal_texts.map((x) => (x.text_key === 'your_money' ? { ...x, variant: 'unreachable' } : x)) }
     const id = (await call('POST', '/api/packs', first, hidden)).json().id
@@ -562,7 +562,7 @@ describe('switching to the real mode', () => {
     const undo = (await call('POST', '/api/requests/pack-activate', first, { pack_id: back })).json().id
     expect((await call('POST', `/api/requests/${undo}/approve`, second)).statusCode).toBe(200)
   })
-  it('stored pack rows cannot change', async () => {
+  it('TC-OP-04 stored pack rows cannot change', async () => {
     await expect(t.app.query("UPDATE regime_pack SET key = 'x'")).rejects.toThrow()
     await expect(t.owner.query("UPDATE regime_pack SET key = 'x'")).rejects.toThrow(/only takes new rows/)
     await expect(t.owner.query("UPDATE legal_text SET body = 'x'")).rejects.toThrow(/only takes new rows/)
@@ -613,7 +613,7 @@ describe('switching to the real mode', () => {
     expect(row).toEqual([{ prepared_by: first.id, approved_by: second.id, holder: 'Example Client Money Ltd' }])
     expect((await call('GET', '/api/sandbox/payment-instruction/GBP', first)).statusCode).toBe(404)
   })
-  it('in the real mode: no way back in through self-approval, a profile that breaks the rules, or a placeholder pack', async () => {
+  it('TC-OP-02 in the real mode: no way back in through self-approval, a profile that breaks the rules, or a placeholder pack', async () => {
     expect((await call('POST', '/api/requests/mode-switch', first, SWITCH)).statusCode).toBe(409)
     const ar = await call('POST', '/api/requests/profile', first, { ...SWITCH, regulatory_status: 'appointed_representative' })
     expect(ar.statusCode).toBe(409)
@@ -629,7 +629,7 @@ describe('switching to the real mode', () => {
     expect(refused.json().error).toMatch(/placeholder/)
     await expect(t.owner.query("UPDATE instance_profile SET regulatory_status = 'appointed_representative'")).rejects.toThrow(/real_mode_profile/)
   })
-  it('in the real mode: the separation cannot be undone, and every role change needs a second admin', async () => {
+  it('TC-OP-02 in the real mode: the separation cannot be undone, and every role change needs a second admin', async () => {
     const rolesOf = async (id: string) => (await call('GET', '/api/users', first)).json().users.find((u: { id: string }) => u.id === id).roles
     expect((await call('DELETE', `/api/users/${reviewer.id}/roles/reviewer`, first)).statusCode).toBe(409)
     expect((await call('POST', `/api/users/${reviewer.id}/disable`, first)).statusCode).toBe(409)
@@ -666,7 +666,7 @@ describe('switching to the real mode', () => {
     const restore = await call('PUT', `/api/users/${reviewer.id}/roles/reviewer`, first)
     await call('POST', `/api/requests/${restore.json().requestId}/approve`, second)
   })
-  it('in the real mode, disabling someone with a role waits for a second admin; someone with no role goes at once', async () => {
+  it('TC-OP-02 in the real mode, disabling someone with a role waits for a second admin; someone with no role goes at once', async () => {
     const extra = await person('extra.reviewer@example.test', [])
     const g = await call('PUT', `/api/users/${extra.id}/roles/reviewer`, first)
     await call('POST', `/api/requests/${g.json().requestId}/approve`, second)
@@ -703,7 +703,7 @@ describe('switching to the real mode', () => {
     expect(direct.json().requestId).toBeUndefined()
     expect((await call('GET', '/api/session', none)).statusCode).toBe(401)
   })
-  it('an older role request cannot undo a newer decision', async () => {
+  it('TC-OP-02 an older role request cannot undo a newer decision', async () => {
     const c = await person('role.target@example.test', [])
     const rolesOf = async () => (await call('GET', '/api/users', first)).json().users.find((u: { id: string }) => u.id === c.id).roles
     const older = (await call('PUT', `/api/users/${c.id}/roles/admin`, first)).json().requestId
@@ -720,7 +720,7 @@ describe('switching to the real mode', () => {
     // a request about another role is untouched
     expect((await call('POST', `/api/requests/${otherRole}/reject`, second)).statusCode).toBe(200)
   })
-  it('an admin removed before the lock cannot act; parallel approvals of one request give one success', async () => {
+  it('TC-OP-02 an admin removed before the lock cannot act; parallel approvals of one request give one success', async () => {
     const gone = await person('gone@example.test', [])
     const g = await call('PUT', `/api/users/${gone.id}/roles/admin`, first)
     const results = await Promise.all([1, 2, 3].map(() => call('POST', `/api/requests/${g.json().requestId}/approve`, second)))
@@ -737,7 +737,7 @@ describe('switching to the real mode', () => {
     expect((await call('GET', '/api/session', client)).statusCode).toBe(401)
     expect((await app.inject({ method: 'POST', url: '/api/login', payload: { email: 'gone@example.test', password: PW }, remoteAddress: '10.7.0.1' })).statusCode).toBe(401)
   })
-  it('a request cannot be rewritten by the application role, and what was asked is fixed in the audit chain', async () => {
+  it('TC-OP-02 a request cannot be rewritten by the application role, and what was asked is fixed in the audit chain', async () => {
     const asked = (await call('POST', '/api/requests/profile', first, { ...SWITCH, accountable_person: 'Fixed Answer' })).json().id
     await expect(t.app.query("UPDATE admin_request SET payload = '{}' WHERE id = $1", [asked])).rejects.toThrow(/cannot be rewritten/)
     await expect(t.app.query('UPDATE admin_request SET requested_by = $2 WHERE id = $1', [asked, second.id])).rejects.toThrow(/cannot be rewritten/)
@@ -749,7 +749,7 @@ describe('switching to the real mode', () => {
     expect(d.detail).toContain('Fixed Answer')
     expect(d.detail_hmac).toBe(t.keyring.hmac(`audit-detail\0${d.detail}`))
   })
-  it('an admin removed while a change waits for the lock cannot complete it', async () => {
+  it('TC-OP-02 an admin removed while a change waits for the lock cannot complete it', async () => {
     const late = await person('late.admin@example.test', ['admin'])
     const base = { rate_bps: 1, min_minor: '0', max_minor: '0', surcharge_threshold_minor: '0', surcharge_bps: 0 }
     const attempts: Array<[string, unknown]> = [['/api/fee-config', base], ['/api/users', { email: 'made.late@example.test', name: 'x', password: PW }], ['/api/packs', fullPack('late-pack')]]
@@ -778,7 +778,7 @@ describe('switching to the real mode', () => {
     expect((await t.owner.query("SELECT 1 FROM regime_pack WHERE key = 'late-pack'")).rowCount).toBe(0)
     expect((await t.owner.query('SELECT 1 FROM fee_config')).rowCount).toBe(0)
   })
-  it('a session that ends while a change waits for the lock cannot complete it', async () => {
+  it('TC-OP-02 a session that ends while a change waits for the lock cannot complete it', async () => {
     const admin2 = await person('session.ends@example.test', ['admin'])
     const hold = await t.owner.connect()
     try {
@@ -801,7 +801,7 @@ describe('switching to the real mode', () => {
     expect((await t.owner.query('SELECT 1 FROM fee_config')).rowCount).toBe(0)
     await t.owner.query('DELETE FROM role_grant WHERE user_id = $1', [admin2.id])
   })
-  it('the database itself refuses an approval by the person who asked, and payment details prepared and approved by one person', async () => {
+  it('TC-OP-02 / TC-OP-05 the database itself refuses an approval by the person who asked, and payment details prepared and approved by one person', async () => {
     const r = await t.owner.query<{ id: string; requested_by: string }>("SELECT id, requested_by FROM admin_request WHERE status = 'pending' LIMIT 1")
     await expect(t.owner.query("UPDATE admin_request SET status = 'approved', decided_by = requested_by WHERE id = $1", [r.rows[0]!.id])).rejects.toThrow(/second_person/)
     await expect(t.owner.query(
@@ -949,7 +949,7 @@ describe('start-up', () => {
       await fresh.drop()
     }
   })
-  it('the first admin needs the deployment secret and is created once; a new instance starts in the sandbox', async () => {
+  it('TC-OP-02 the first admin needs the deployment secret and is created once; a new instance starts in the sandbox', async () => {
     const fresh = await createTestDb()
     try {
       await expect(bootstrapAdmin(fresh.app, fresh.keyring, undefined, undefined)).rejects.toThrow(/required on first start/)

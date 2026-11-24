@@ -8,6 +8,7 @@ import { codeAt, stepOf } from '../src/lib/totp.ts'
 import type { Tx } from '../src/store/db.ts'
 import { insertPack } from '../src/store/packs.ts'
 import { roleUrl, TEST_URL } from '../src/store/testdb.ts'
+import { addEntity, person, sql } from './helpers.ts'
 
 async function activatePack(key: string) {
   const c = new pg.Client({ connectionString: roleUrl(TEST_URL, readFileSync('test-results-db.txt', 'utf8').trim()) })
@@ -398,4 +399,19 @@ test('TC-ELG-03 a limit reached for good promises no date and offers nothing', a
   await expect(page.getByRole('button', { name: 'Start the assessment' })).toHaveCount(0)
   await expect(page.getByTestId('locked')).toHaveCount(0)
   await activatePack('uk-fpo-template')
+})
+
+test('TC-KYC-02 a pass reads as a document review with its date, and says screening is the operator’s', async ({ browser }) => {
+  const x = await person(browser, 'kyc-passed')
+  await addEntity(x.page)
+  await sql(
+    "INSERT INTO kyc_case (id, entity_id, entity_version, provider, status, decided_at, expires_on) SELECT gen_random_uuid(), e.id, e.current_version, 'manual', 'approved', '2025-03-14T12:00:00Z', '2029-01-01' FROM legal_entity e JOIN user_account u ON u.id = e.owner_user WHERE u.email = $1",
+    [x.email],
+  )
+  await x.page.reload()
+  // a fixed past date, still valid: a screen that printed today would fail (Codex group B r1 #12)
+  await expect(x.page.getByTestId('passed-on')).toHaveText(
+    "Document review passed (2025-03-14). Sanctions and PEP screening are the operator's, outside this software.",
+  )
+  await x.context.close()
 })

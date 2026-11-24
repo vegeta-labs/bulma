@@ -233,11 +233,11 @@ export function registerD3Lead(app: FastifyInstance, d: D3LeadDeps) {
     })
   })
 
-  /** R-LNK-09: people counted once, by the country they gave. A reminder only. */
+  /** R-LNK-09: counted when bound, once per person, by the country they gave; passing or a withdrawn invitation does not take anyone off (they received the promotion). A reminder only. */
   async function reach(c: Q, deal: D3Deal) {
     const people = (
       await c.query<{ user_id: string; country: string | null }>(
-        "SELECT i.user_id, u.country FROM deal_invitation i JOIN user_account u ON u.id = i.user_id WHERE i.deal_id = $1 AND i.state = 'active'",
+        "SELECT i.user_id, u.country FROM deal_invitation i JOIN user_account u ON u.id = i.user_id WHERE i.deal_id = $1",
         [deal.id],
       )
     ).rows.map((r) => ({ userId: r.user_id, country: r.country }))
