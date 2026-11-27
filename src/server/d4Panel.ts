@@ -89,7 +89,7 @@ export interface PanelRow extends LeadRowView {
  * commitment, its events, a signature, a receipt or its reversal, a refund step, an identity check, a reconfirmation, an amount
  * proposal, an instruction issued or voided). Before a commitment: the invitation, saying no, or the waiting list.
  */
-const PART_SINCE = `SELECT GREATEST(p.created_at, p.updated_at, p.ended_at,
+export const PART_SINCE = `SELECT GREATEST(p.created_at, p.updated_at, p.ended_at,
     (SELECT max(created_at) FROM participation_event WHERE participation_id = p.id),
     (SELECT max(signed_at) FROM signature_record WHERE participation_id = p.id),
     (SELECT max(created_at) FROM transfer_mark WHERE participation_id = p.id),

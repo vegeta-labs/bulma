@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { auditHash, GENESIS, verifyChain, type AuditRecord } from './auditChain.ts'
 import { feeConfigErrors, MAX_MINOR, mulDiv, mulDivHalfUp, platformFee, type FeeConfig } from './fees.ts'
 import { GATES, isGateName } from './gate.ts'
+import { DEMO_PACK_TEXTS, demoPackContent, sameDemoSide, statementSide } from './demo.ts'
+import { decideAccept } from './invite.ts'
 import { approvalRefusal, hasDistinctAdminsAndReviewer, isSingleAdminException, roleChangeRefusal, sandboxPaymentInstruction, switchBlockers, type Staff, type SwitchFacts } from './instance.ts'
 import { effectivePackId, invariantViolations, parsePack, placeholderTexts, thresholds, type RegimePack } from './regimePack.ts'
 
@@ -218,11 +220,59 @@ const B: Staff = { userId: 'b', roles: ['admin', 'approver'] }
 const R: Staff = { userId: 'r', roles: ['reviewer'] }
 const READY: SwitchFacts = {
   regulatoryStatus: 'authorised_firm', accountablePerson: 'A Person', accountableConfirmedOn: '2026-11-01', today: '2026-11-06',
-  placeholderTextKeys: [], packFormatErrors: [], paymentInstructionsConfigured: true, paymentFileInvalid: false, yourMoneyFilled: true, staff: [A, B, R],
+  placeholderTextKeys: [], packFormatErrors: [], paymentInstructionsConfigured: true, paymentFileInvalid: false, yourMoneyFilled: true, staff: [A, B, R], demoAdding: false,
 }
 const codes = (f: Partial<SwitchFacts>) => switchBlockers({ ...READY, ...f }).map((b) => b.code)
 
 describe('instance rules', () => {
+  it('TC-DEMO-07 the demo pack changes only the three texts, keeps them placeholders, and still loads under its kept name', () => {
+    for (const key of ['uk-fpo-template', 'uk-cobs-template']) {
+      const from = load(key)
+      const demo = demoPackContent(from, 3)
+      expect(parsePack(demo).errors).toEqual([])
+      expect([demo.key, demo.version, demo.regime]).toEqual([`${from.regime}-demo-template`, 3, from.regime])
+      expect([demo.steps, demo.assessment, demo.thresholds]).toEqual([from.steps, from.assessment, from.thresholds])
+      const changed = demo.legal_texts.filter((t, i) => t.body !== from.legal_texts[i]!.body).map((t) => t.text_key)
+      expect(new Set(changed)).toEqual(new Set(['promotion_warning', from.sender.name_text_key, 'your_money']))
+      for (const t of demo.legal_texts.filter((x) => changed.includes(x.text_key))) {
+        expect(t.is_placeholder).toBe(true)
+        expect(Object.values(DEMO_PACK_TEXTS)).toContain(t.body)
+      }
+      expect(placeholderTexts(demo)).toEqual(expect.arrayContaining(changed))
+    }
+    // the sender is whichever text the pack names for it
+    const fpo = load('uk-fpo-template')
+    const renamed = { ...fpo, sender: { ...fpo.sender, name_text_key: 'risk_summary' } }
+    expect(demoPackContent(renamed, 1).legal_texts.find((t) => t.text_key === 'risk_summary')!.body).toBe(DEMO_PACK_TEXTS.sender)
+  })
+  it('TC-DEMO-05 demo and ordinary meet only on the same run; an invitation across the line is refused before anything else', () => {
+    expect([sameDemoSide(null, null), sameDemoSide('r1', 'r1'), sameDemoSide('r1', null), sameDemoSide(null, 'r1'), sameDemoSide('r1', 'r2')]).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ])
+    const facts = {
+      dealLive: false,
+      held: true,
+      link: { disabled: true, closingPaused: false, awaitingApproval: false },
+      person: { activeInvitation: true, endedBefore: false },
+      targeted: null,
+      verifiedEmail: 'a@example.test',
+    }
+    expect(decideAccept({ ...facts, sameDemoSide: false })).toEqual({ ok: false, reason: 'demo_apart' })
+    expect(decideAccept({ ...facts, sameDemoSide: true })).toEqual({ ok: false, reason: 'held' })
+    // a statement is on the side of the people it matches; none matched is ordinary; both sides, or two runs, refused
+    expect(statementSide([])).toEqual({ side: null })
+    expect(statementSide([null, null])).toEqual({ side: null })
+    expect(statementSide(['r1', 'r1'])).toEqual({ side: 'r1' })
+    expect([statementSide(['r1', null]), statementSide([null, 'r1']), statementSide(['r1', 'r2'])]).toEqual([null, null, null])
+  })
+  it('TC-DEMO-04 a demo deal being added blocks the switch, and is named', () => {
+    expect(codes({ demoAdding: true })).toEqual(['demo_adding'])
+    expect(switchBlockers({ ...READY, demoAdding: true })[0]!.message).toMatch(/demo deal is being added/)
+  })
   it('TC-OP-02 each missing item blocks the switch and is named', () => {
     expect(codes({})).toEqual([])
     expect(codes({ regulatoryStatus: null })).toEqual(['regulatory_status'])

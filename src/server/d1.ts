@@ -1050,11 +1050,26 @@ export function registerD1(app: FastifyInstance, d: D1Deps) {
     }
   }
 
+  /**
+   * The pack a person qualifies under: the instance's current one, or for a demo account its run's demo pack (R-DEMO-07,
+   * owner 2026-11-24). A demo account only ever takes part in demo deals, which are bound to that pack, so the warning it
+   * confirms here is the one those deals ask for.
+   */
+  async function eligibilityPack(c: Pick<Tx, 'query'>, userId: string) {
+    const demo = (
+      await c.query<{ pack_id: string }>(
+        'SELECT r.pack_id FROM user_account u JOIN demo_run r ON r.id = u.demo_run JOIN regime_pack p ON p.id = r.pack_id WHERE u.id = $1 AND p.demo_only',
+        [userId],
+      )
+    ).rows[0]
+    return demo ? { id: demo.pack_id, pack: (await packContent(c, demo.pack_id))! } : activePack(c)
+  }
+
   /** Run one step inside the person's lock, refused unless it is the step their pack has them on. */
   async function onStep<T>(who: { id: string; sessionHmac: string }, kinds: readonly StepKind[], fn: (c: Tx, pack: RegimePack, packId: string, f: EligibilityFacts) => Promise<T>): Promise<T> {
     return tx(d.db, async (c) => {
       await liveShare(c, who)
-      const { id, pack } = await activePack(c)
+      const { id, pack } = await eligibilityPack(c, who.id)
       const f = await facts(c, who.id, pack)
       if (!kinds.some((k) => stepOpen(pack, k, f, now()))) throw new Refused('This step is not open yet.')
       return fn(c, pack, id, f)
@@ -1079,7 +1094,7 @@ export function registerD1(app: FastifyInstance, d: D1Deps) {
   const STALE = 'The wording has changed. Read it again.'
 
   app.get('/api/eligibility', verified, async (req) => {
-    const { pack } = await activePack(d.db)
+    const { pack } = await eligibilityPack(d.db, req.user!.id)
     const f = await facts(d.db, req.user!.id, pack)
     const t = now()
     const next = nextEligibilityStep(pack, f, t)
@@ -1301,8 +1316,10 @@ export function registerD1(app: FastifyInstance, d: D1Deps) {
     return { ok: true }
   })
   // TC-ELG-01: evidence exists for anyone who signed, even someone who never committed. No question answers.
-  app.get<{ Params: { id: string } }>('/api/review/users/:id/evidence', reviewer, async (req) => {
+  app.get<{ Params: { id: string } }>('/api/review/users/:id/evidence', reviewer, async (req, reply) => {
     const id = Uuid.parse(req.params.id)
+    // R-DEMO-06: a retired demo account's records are gone from every page, an id typed by hand included
+    if ((await d.db.query<{ gone: boolean }>('SELECT demo_retired_user($1) AS gone', [id])).rows[0]!.gone) return reply.code(404).send({ error: 'No such person.' })
     await tx(d.db, (c) => appendAudit(c, d.k, { actor: req.user!.id, action: 'evidence.exported', entity: id }))
     const q = (sql: string) => d.db.query(sql, [id]).then((r) => r.rows)
     return {

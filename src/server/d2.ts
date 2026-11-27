@@ -882,15 +882,25 @@ export function registerD2(app: FastifyInstance, d: D2Deps) {
         throw new Refused('Someone who approved this deal now has a stake in it. It must be reviewed again.')
       if (!inst.active_pack_id) throw new Refused('No rule pack is active.')
       if (!deal.fee_config_id) throw new Refused('The operator has not set the platform fee yet.')
+      // R-DEMO-07: a demo deal takes its run's demo pack, in the sandbox only; the audit row's pack stays the instance's
+      const demoPack =
+        inst.mode === 'sandbox'
+          ? (
+              await c.query<{ id: string; v: string }>(
+                "SELECT p.id, p.key || '@' || p.version AS v FROM deal d JOIN demo_run r ON r.id = d.demo_run JOIN regime_pack p ON p.id = r.pack_id WHERE d.id = $1 AND p.demo_only",
+                [id],
+              )
+            ).rows[0]
+          : undefined
       // R-OP-04.2: the pack in force now stays with this deal
       await c.query('UPDATE deal SET state = $2, pack_id = $3, went_live_at = $4::timestamptz, updated_at = $4::timestamptz WHERE id = $1', [
         id,
         to,
-        inst.active_pack_id,
+        demoPack?.id ?? inst.active_pack_id,
         now().toISOString(),
       ])
       await logEvent(c, id, deal.state, to, 'launch', req.user!.id, { n: deal.approved_version ?? undefined })
-      await appendAudit(c, d.k, { actor: req.user!.id, action: 'deal.launched', entity: id })
+      await appendAudit(c, d.k, { actor: req.user!.id, action: 'deal.launched', entity: id, ...(demoPack ? { detail: { demo_pack: demoPack.v } } : {}) })
       // R-LNK-02: the two default links come with launch, in the same transaction
       await createDefaultLinks(c, d.k, id, deal.draft.economics?.default_carry_bps ?? 0, req.user!.id)
       return { state: to }

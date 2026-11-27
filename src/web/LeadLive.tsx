@@ -1,5 +1,6 @@
 // D3 lead screens for a live deal: links, invitations to an address, the expected-investor list, messages (R-LNK-*, R-PIP-*).
 // A link is shown for a person to copy; nothing writes to the clipboard.
+import { fileLink } from './browser.ts'
 import { useState, type FormEvent } from 'react'
 import { money } from '../lib/dealSheet.ts'
 import { percentToBps, typedAmountToDraft } from '../lib/pounds.ts'
@@ -441,7 +442,7 @@ function Pipeline({ dealId, links, live }: { dealId: string; links: LinkRow[]; l
         </div>
       )}
       <p>
-        <a href={`/api/deals/${dealId}/pipeline.csv`}>Download the list</a>
+        <a {...fileLink(`/api/deals/${dealId}/pipeline.csv`)}>Download the list</a>
       </p>
       <Problem error={error} />
     </div>

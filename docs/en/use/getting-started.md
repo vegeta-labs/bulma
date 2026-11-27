@@ -120,6 +120,14 @@ Click **I have paid**. The page now says **You said you have paid. The operator 
 - Recording the money that arrives is the operator's work: see [Money](../operator-guide.md#money) in the operator guide.
 - To learn each role properly, go on to the [Lead guide](lead-guide.md) and the [Investor guide](investor-guide.md).
 
+## A ready-made demo deal
+
+To look around without doing every step yourself, add the demo deal. Sign in as the admin and, on **Home**, click **Add demo deal** under **Demo deal**. After a few seconds the page lists a fictional lead and four investors with their emails and passwords. **These passwords are shown only now**: copy them before you leave the page.
+
+Sign in as any of them. The lead has three deals: one live, one waiting for review and one draft. On the live deal the four investors are at different steps: one still verifying, one to sign, one to pay and one funded. Everything in it is made up and uses sample legal text.
+
+The demo deal exists only in the sandbox, and it can be added once. When the instance switches to the real mode, its accounts stop working and its deals and people are hidden. To add it when the app starts instead, see `BULMA_DEMO_DEAL` in [Configuration](../configuration.md#the-app).
+
 ## When it goes wrong
 
 | What you see | What to do |

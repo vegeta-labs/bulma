@@ -75,7 +75,7 @@ export interface PersonOnDeal {
 export type AcceptResult =
   | { ok: true; kind: 'new' }
   | { ok: true; kind: 'already_invited' } // R-LNK-11: terms unchanged, the lead is told
-  | { ok: false; reason: 'deal_not_open' | 'link_unusable' | 'wrong_address' | 'consumed' | 'ended_before' | 'held' }
+  | { ok: false; reason: 'deal_not_open' | 'link_unusable' | 'wrong_address' | 'consumed' | 'ended_before' | 'held' | 'demo_apart' }
 
 export interface AcceptFacts {
   dealLive: boolean
@@ -86,12 +86,16 @@ export interface AcceptFacts {
   targeted: { email: string; consumed: boolean; revoked: boolean; allowsReentry: boolean } | null
   /** The person's verified address. */
   verifiedEmail: string
+  /** The person and the deal are on the same side of the demo line (R-DEMO-05). */
+  sameDemoSide: boolean
 }
 
 const sameAddress = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase()
 
 /** R-LNK-10, R-LNK-11, R-LNK-07, §5.2: binding an opened link to a signed-in person with a verified address. */
 export function decideAccept(f: AcceptFacts): AcceptResult {
+  // first: across the demo line nothing else about the deal is told
+  if (!f.sameDemoSide) return { ok: false, reason: 'demo_apart' }
   if (f.held) return { ok: false, reason: 'held' }
   if (!f.dealLive) return { ok: false, reason: 'deal_not_open' }
   if (f.targeted) {

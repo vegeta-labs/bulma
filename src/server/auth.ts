@@ -21,13 +21,14 @@ type Q = Pick<Tx, 'query'>
 export const passwordProblem = (p: string) =>
   p.length < MIN_PASSWORD ? `The password must have at least ${MIN_PASSWORD} characters.` : p.length > MAX_PASSWORD ? 'The password is too long.' : null
 
-export async function createUser(c: Tx, k: Keyring, o: { email: string; name: string; password?: string; passwordHash?: string; by: string | null; selfRegistered?: boolean; firstName?: string; lastName?: string }): Promise<string> {
+export async function createUser(c: Tx, k: Keyring, o: { email: string; name: string; password?: string; passwordHash?: string; by: string | null; selfRegistered?: boolean; firstName?: string; lastName?: string; demoRun?: string }): Promise<string> {
   const problem = o.passwordHash ? null : passwordProblem(o.password ?? '')
   if (problem) throw new Error(problem)
   const id = randomUUID()
-  // an account an admin creates has a temporary password and an address the admin vouches for; a registration proves its own
-  await c.query('INSERT INTO user_account (id, email, name, password_hash, must_change_password, email_verified_at, first_name, last_name) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)', [
-    id, o.email.trim(), o.name.trim(), o.passwordHash ?? (await argon2.hash(o.password!, { type: argon2.argon2id })), !o.selfRegistered, o.selfRegistered ? null : new Date().toISOString(), o.firstName ?? null, o.lastName ?? null,
+  // an account an admin creates has a temporary password and an address the admin vouches for; a registration proves its own.
+  // A demo account carries its run from the start, and its password is the one the admin is shown once (R-DEMO-08).
+  await c.query('INSERT INTO user_account (id, email, name, password_hash, must_change_password, email_verified_at, first_name, last_name, demo_run) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', [
+    id, o.email.trim(), o.name.trim(), o.passwordHash ?? (await argon2.hash(o.password!, { type: argon2.argon2id })), !o.selfRegistered && !o.demoRun, o.selfRegistered ? null : new Date().toISOString(), o.firstName ?? null, o.lastName ?? null, o.demoRun ?? null,
   ])
   await appendAudit(c, k, { actor: o.by ?? 'system', action: 'user.created', entity: id, detail: { email: o.email.trim(), name: o.name.trim() } })
   return id
@@ -38,10 +39,10 @@ export async function grantRole(c: Tx, k: Keyring, userId: string, role: Instanc
   if (r.rowCount) await appendAudit(c, k, { actor: by ?? 'system', action: `role.granted.${role}`, entity: userId })
 }
 
-/** Everyone who can act: disabled accounts count for nothing. */
+/** Everyone who can act: disabled accounts count for nothing, and a demo account never counts (R-DEMO-08). */
 export async function currentStaff(c: Q): Promise<Staff[]> {
   const r = await c.query<{ user_id: string; roles: InstanceRole[] }>(
-    'SELECT g.user_id, array_agg(g.role) AS roles FROM role_grant g JOIN user_account u ON u.id = g.user_id WHERE u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL GROUP BY g.user_id',
+    'SELECT g.user_id, array_agg(g.role) AS roles FROM role_grant g JOIN user_account u ON u.id = g.user_id WHERE u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL AND u.demo_run IS NULL GROUP BY g.user_id',
   )
   return r.rows.map((x) => ({ userId: x.user_id, roles: x.roles }))
 }

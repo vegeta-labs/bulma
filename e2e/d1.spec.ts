@@ -279,7 +279,30 @@ test('TC-AUTHZ-02 the whole path on screen: a person sends documents, a reviewer
   await entity.getByLabel('This information is true').check()
   await entity.getByRole('button', { name: /Send for review/ }).click()
   await expect(entity.getByTestId('entity-status')).toHaveText('In review')
+  // a sign-out that does not go through says why and keeps the person signed in
+  await page.route('**/api/logout', (r) => r.fulfill({ status: 503, json: { error: 'Try again in a moment.' } }))
   await page.getByRole('button', { name: 'Sign out' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: 'Try again in a moment.' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
+  await page.unroute('**/api/logout')
+  // a session that had already ended: signed out, the sign-in screen shows, no error
+  await page.route('**/api/logout', (r) => r.fulfill({ status: 401, json: { error: 'not signed in' } }))
+  await page.getByRole('button', { name: 'Sign out' }).click()
+  await expect(page.getByRole('button', { name: 'Sign out' })).toHaveCount(0)
+  await expect(page.getByText('not signed in')).toHaveCount(0)
+  await page.unroute('**/api/logout')
+  await page.reload()
+  // the server ends the session but its answer is lost: the app asks again and shows the person signed out
+  await page.route('**/api/logout', async (r) => {
+    await r.fetch()
+    await r.abort('connectionreset')
+  })
+  await page.getByRole('button', { name: 'Sign out' }).click()
+  await expect(page.getByRole('button', { name: 'Sign out' })).toHaveCount(0)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await page.unroute('**/api/logout')
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Sign out' })).toHaveCount(0)
 
   // someone else, given roles, must set up two-step before anything else
   await context.clearCookies()

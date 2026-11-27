@@ -4,6 +4,7 @@ coverage/
 __pycache__/
 test-report.json
 e2e-report.json
+e2e-demo-report.json
 test-results/
 playwright-report/
 .env
@@ -16,3 +17,17 @@ test-results-db.txt
 # copies made by file sync (e.g. "src/server 2"), never part of the project
 * 2
 * 2.*
+
+# BULMA_DEMO_DEAL=1 writes the demo sign-ins here by default (R-DEMO-08)
+bulma-demo-sign-ins.txt
+
+# the demo export's working output (scripts/demo-snapshot.ts)
+/.demo-export/
+
+# the static demo pack (scripts/demo-build.ts)
+/dist-demo/
+
+# the packed archive and its hash (scripts/demo-pack.ts)
+/.demo-pack/
+# one demo step at a time (scripts/demo-export/lock.ts): the lock, and nothing else that starts with its name (Codex P r5 #4)
+/.demo.lock

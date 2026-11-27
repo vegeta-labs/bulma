@@ -16,6 +16,7 @@ import { tx, type Db, type Tx } from '../store/db.ts'
 import { packContent } from '../store/packs.ts'
 import { currentStaff, grantRole, sessionStillLive, voidTokens } from './auth.ts'
 import { applyPolicyToLinks, policyNow } from './d3Core.ts'
+import { recoverDemoRun, retireDemoAtSwitch, type DropFiles } from './demo.ts'
 import type { MailQueue, QueuedMail } from './outbox.ts'
 
 export class Refused extends Error {
@@ -99,6 +100,8 @@ async function factsFor(c: Pick<Tx, 'query'>, packId: string, input: SwitchInput
     paymentFileInvalid: payment.state === 'invalid',
     yourMoneyFilled: payment.state === 'ok' && yourMoneyFilled(payment.entries, pack),
     staff: await currentStaff(c),
+    // read under the caller's instance lock: starting a demo run takes the same lock (R-DEMO-04)
+    demoAdding: (await c.query<{ on: boolean }>('SELECT demo_adding IS NOT NULL AS on FROM instance_profile WHERE id = 1')).rows[0]!.on,
   }
   return { facts, payment }
 }
@@ -127,13 +130,18 @@ function realProfileRefusal(input: SwitchInput): Refused | null {
     paymentFileInvalid: false,
     yourMoneyFilled: true,
     staff: [{ userId: 'x', roles: ['admin', 'approver'] }, { userId: 'y', roles: ['admin'] }, { userId: 'z', roles: ['reviewer'] }],
+    demoAdding: false, // only the profile is judged here, in the real mode, where no demo run can be
   })
   return blockers.length ? new Refused('The real mode cannot take this profile.', blockers) : null
 }
 
+export const DEMO_PACK_NOT_CURRENT = 'A demo rules pack is only for the demo deal; it cannot be the current pack.'
+
 async function packRefusal(c: Tx, packId: string, mode: Mode): Promise<Refused | null> {
   const pack = await packContent(c, packId)
   if (!pack) return new Refused('No such pack.')
+  // R-DEMO-07: checked when asked and again when approved, so a request already made is caught too
+  if ((await c.query('SELECT 1 FROM regime_pack WHERE id = $1 AND demo_only', [packId])).rowCount) return new Refused(DEMO_PACK_NOT_CURRENT)
   const invalid = invariantViolations(pack)
   if (invalid.length) return new Refused(`This pack no longer passes the format check: ${invalid.join('; ')}.`)
   if (mode === 'sandbox') return null
@@ -157,6 +165,8 @@ export interface Ctx {
   paymentFile?: string
   /** R23: mail queued in the transaction of the change, sent after the commit; a failure never undoes the change. */
   mail?: MailQueue
+  /** R-DEMO-06: drops the sandbox's in-memory copies of the demo files the switch removed, after the commit. */
+  dropFiles?: DropFiles
 }
 
 /**
@@ -205,6 +215,7 @@ async function insertRequest(c: Tx, k: Keyring, kind: RequestKind, payload: obje
 
 export async function requestModeSwitch(x: Ctx, who: Who, raw: unknown): Promise<string> {
   const by = who.id
+  await recoverDemoRun(x.db, x.k, x.dropFiles)
   const input = profileSchema.parse(raw)
   return tx(x.db, async (c) => {
     const row = await lockInstance(c)
@@ -263,14 +274,29 @@ async function revoke(c: Tx, k: Keyring, by: string, userId: string, role: Insta
  * Direct in the sandbox. In the real mode every role change goes to a second admin: otherwise one admin could add a puppet
  * reviewer or approver and remove the real one, and every control resting on those roles would rest on that admin alone.
  */
+/** R-DEMO-08: only the seed gives a demo account a role, and only its run's reviewer. */
+const DEMO_NO_ROLE = 'A demo account cannot take a role.'
+
+export const RETIRED_DEMO_ACCOUNT = 'a removed demo account'
+
+/** R-DEMO-06: a retired demo account is no one to act on or ask about, whichever admin action names it (Codex r1 #3). */
+async function liveUser(c: Pick<Tx, 'query'>, userId: string): Promise<{ disabled_at: string | null; demo: boolean; mfa_enabled_at: string | null }> {
+  const r = await c.query<{ disabled_at: string | null; demo: boolean; mfa_enabled_at: string | null }>(
+    'SELECT disabled_at, demo_run IS NOT NULL AS demo, mfa_enabled_at FROM user_account WHERE id = $1 AND NOT demo_retired_user(id)',
+    [userId],
+  )
+  if (!r.rows[0]) throw new Refused('No such user.')
+  return r.rows[0]
+}
+
 export async function changeRole(x: Ctx, who: Who, userId: string, role: InstanceRole, grant: boolean): Promise<{ requestId?: string }> {
   const by = who.id
   return tx(x.db, async (c) => {
     const row = await lockInstance(c)
     await assertAdmin(c, who)
-    const target = (await c.query<{ disabled_at: string | null }>('SELECT disabled_at FROM user_account WHERE id = $1', [userId])).rows[0]
-    if (!target) throw new Refused('No such user.')
+    const target = await liveUser(c, userId)
     if (grant && target.disabled_at) throw new Refused('This account is disabled.')
+    if (grant && target.demo) throw new Refused(DEMO_NO_ROLE)
     if (!grant) {
       const refusal = await revokeRefusal(c, row.mode, userId, role)
       if (refusal) throw new Refused(refusal)
@@ -298,6 +324,7 @@ export async function disableUser(x: Ctx, who: Who, userId: string): Promise<{ r
   return tx(x.db, async (c) => {
     const row = await lockInstance(c)
     await assertAdmin(c, who)
+    await liveUser(c, userId)
     const staff = await currentStaff(c)
     const refusal = roleChangeRefusal(row.mode, staff.filter((s) => s.userId !== userId))
     if (refusal) throw new Refused(refusal)
@@ -315,8 +342,7 @@ export async function requestMfaReset(x: Ctx, who: Who, userId: string): Promise
   return tx(x.db, async (c) => {
     await lockInstance(c)
     await assertAdmin(c, who)
-    const u = (await c.query<{ mfa_enabled_at: string | null }>('SELECT mfa_enabled_at FROM user_account WHERE id = $1', [userId])).rows[0]
-    if (!u) throw new Refused('No such user.')
+    const u = await liveUser(c, userId)
     if (!u.mfa_enabled_at) throw new Refused('This person has no two-step sign-in to reset.')
     return insertRequest(c, x.k, 'mfa_reset', { user_id: userId }, who.id)
   })
@@ -352,9 +378,8 @@ export async function setRetentionHold(x: Ctx, who: Who, userId: string, hold: b
     const row = await lockInstance(c)
     await assertAdmin(c, who)
     // putting a hold on only delays deletion, so it needs nobody else
+    await liveUser(c, userId)
     if (row.mode === 'real' && !hold) {
-      const u = await c.query('SELECT 1 FROM user_account WHERE id = $1', [userId])
-      if (!u.rowCount) throw new Refused('No such user.')
       return { requestId: await insertRequest(c, x.k, 'retention_hold_off', { user_id: userId }, who.id) }
     }
     await applyHold(c, x.k, who.id, userId, hold)
@@ -494,9 +519,14 @@ export function packChanges(from: RegimePack, to: RegimePack): Detail[] {
 /** What the approver is being asked to approve, in full: a button alone would meet the two-person rule in form only. */
 export async function describeRequest(x: Ctx, kind: string, payload: Record<string, unknown>, status: string): Promise<Detail[]> {
   const shown = (v: unknown) => (v === null || v === undefined || v === '' ? 'not given' : String(v))
+  // R-DEMO-06: a request asked before the switch may name a demo account the switch retired; its name and address are not shown (Codex r2 #2)
+  const personOf = async (id: unknown): Promise<string> => {
+    const u = (await x.db.query<{ name: string; email: string; retired: boolean }>('SELECT name, email, demo_retired_user(id) AS retired FROM user_account WHERE id = $1', [id])).rows[0]
+    return !u ? 'unknown' : u.retired ? RETIRED_DEMO_ACCOUNT : `${u.name}, ${u.email}`
+  }
   if (kind === 'user_disable') {
-    const u = (await x.db.query<{ name: string; email: string }>('SELECT name, email FROM user_account WHERE id = $1', [payload.user_id])).rows[0]
-    return [{ label: 'Disable the account of', value: u ? `${u.name}, ${u.email}` : 'unknown' }]
+    const u = await personOf(payload.user_id)
+    return [{ label: 'Disable the account of', value: u }]
   }
   if (kind === 'retention_config') return [{ label: 'Years after a relationship ends', value: shown(payload.relationship_years) }, { label: 'Months without sign-in that end a relationship', value: shown(payload.idle_months) }, { label: 'Years an identity check stays valid', value: shown(payload.kyc_valid_years) }, ...(payload.transaction_years === undefined ? [] : [{ label: 'Years payment details are kept', value: shown(payload.transaction_years) }]), { label: 'Before approving', value: 'A shorter period can delete records at the next run, and that cannot be undone.' }]
   if (kind === 'policy_change') return [
@@ -525,16 +555,16 @@ export async function describeRequest(x: Ctx, kind: string, payload: Record<stri
   ]
   }
   if (kind === 'retention_hold_off') {
-    const u = (await x.db.query<{ name: string; email: string }>('SELECT name, email FROM user_account WHERE id = $1', [payload.user_id])).rows[0]
-    return [{ label: 'Lift the retention hold on', value: u ? `${u.name}, ${u.email}` : 'unknown' }, { label: 'Before approving', value: 'Records past their date can be deleted at the next run, and that cannot be undone.' }]
+    const u = await personOf(payload.user_id)
+    return [{ label: 'Lift the retention hold on', value: u }, { label: 'Before approving', value: 'Records past their date can be deleted at the next run, and that cannot be undone.' }]
   }
   if (kind === 'mfa_reset') {
-    const u = (await x.db.query<{ name: string; email: string }>('SELECT name, email FROM user_account WHERE id = $1', [payload.user_id])).rows[0]
-    return [{ label: 'Clear two-step sign-in for', value: u ? `${u.name}, ${u.email}` : 'unknown' }, { label: 'Before approving', value: 'Check who this person is outside this software. The software cannot.' }]
+    const u = await personOf(payload.user_id)
+    return [{ label: 'Clear two-step sign-in for', value: u }, { label: 'Before approving', value: 'Check who this person is outside this software. The software cannot.' }]
   }
   if (kind === 'role_change') {
-    const u = (await x.db.query<{ name: string; email: string }>('SELECT name, email FROM user_account WHERE id = $1', [payload.user_id])).rows[0]
-    return [{ label: 'Person', value: u ? `${u.name}, ${u.email}` : 'unknown' }, { label: payload.grant ? 'Give the role' : 'Remove the role', value: shown(payload.role) }]
+    const u = await personOf(payload.user_id)
+    return [{ label: 'Person', value: u }, { label: payload.grant ? 'Give the role' : 'Remove the role', value: shown(payload.role) }]
   }
   if (kind === 'pack_activate') {
     const p = (await x.db.query<{ key: string; version: number; regime: string; content_sha256: string; content: RegimePack }>('SELECT key, version, regime, content_sha256, content FROM regime_pack WHERE id = $1', [payload.pack_id])).rows[0]
@@ -605,7 +635,7 @@ async function voidSandboxResults(c: Tx): Promise<void> {
 /** A mail an approval sends: a plain one, or an urgent notice in its fixed words (R-NTF-01). */
 type Tell = QueuedMail | { urgent: UrgentKind; m: UrgentMail }
 
-async function apply(c: Tx, x: Ctx, req: RequestRow, row: InstanceRow, by: string): Promise<{ mails?: Tell[] }> {
+async function apply(c: Tx, x: Ctx, req: RequestRow, row: InstanceRow, by: string): Promise<{ mails?: Tell[]; demoFiles?: string[] }> {
   // judged against the instance as it was when asked: a stale request must not overwrite a newer decision
   if (req.kind !== 'role_change' && req.kind !== 'user_disable' && req.kind !== 'mfa_reset' && req.kind !== 'retention_config' && req.kind !== 'retention_hold_off' && req.kind !== 'policy_change' && req.kind !== 'payment_instruction' && req.payload.base !== row.updated) throw new Refused('The instance changed after this was asked. Ask again.')
   if (req.kind === 'mode_switch') {
@@ -626,7 +656,8 @@ async function apply(c: Tx, x: Ctx, req: RequestRow, row: InstanceRow, by: strin
     // the status is not personal, so it is in the action, inside the hash, and outlives the detail row
     await appendAudit(c, x.k, { actor: by, action: `instance.switched_to_real.${input.regulatory_status}`, entity: 'instance', detail: { request: req.id, payment_sha256: payment.sha256, accountable_person: input.accountable_person, accountable_confirmed_on: input.accountable_confirmed_on } })
     await voidSandboxResults(c)
-    return {}
+    // R-DEMO-06: the exception to R13, in the same transaction; ordinary records change only as above
+    return { demoFiles: await retireDemoAtSwitch(c, x.k) }
   }
   if (req.kind === 'profile_change') {
     const input = profileOf(req.payload)
@@ -665,6 +696,7 @@ async function apply(c: Tx, x: Ctx, req: RequestRow, row: InstanceRow, by: strin
     return { mails: await applyPaymentChange(c, x.k, req.requested_by, by, file.entries) }
   }
   const userId = String(req.payload.user_id)
+  await liveUser(c, userId)
   if (req.kind === 'retention_hold_off') {
     await applyHold(c, x.k, by, userId, false)
     return {}
@@ -695,8 +727,9 @@ async function apply(c: Tx, x: Ctx, req: RequestRow, row: InstanceRow, by: strin
   }
   const role = String(req.payload.role) as InstanceRole
   if (req.payload.grant) {
-    const target = (await c.query<{ disabled_at: string | null }>('SELECT disabled_at FROM user_account WHERE id = $1', [userId])).rows[0]
+    const target = (await c.query<{ disabled_at: string | null; demo: boolean }>('SELECT disabled_at, demo_run IS NOT NULL AS demo FROM user_account WHERE id = $1', [userId])).rows[0]
     if (!target || target.disabled_at) throw new Refused('This account can no longer take the role.')
+    if (target.demo) throw new Refused(DEMO_NO_ROLE)
     await grantRole(c, x.k, userId, role, by)
     return {}
   }
@@ -708,7 +741,8 @@ async function apply(c: Tx, x: Ctx, req: RequestRow, row: InstanceRow, by: strin
 
 export async function decideRequest(x: Ctx, who: Who, requestId: string, decision: 'approve' | 'reject'): Promise<void> {
   const by = who.id
-  await tx(x.db, async (c): Promise<void> => {
+  if (decision === 'approve') await recoverDemoRun(x.db, x.k, x.dropFiles)
+  const demoFiles = await tx(x.db, async (c): Promise<string[]> => {
     const row = await lockInstance(c)
     await assertAdmin(c, who)
     const req = (await c.query<RequestRow>('SELECT id, kind, payload, status, requested_by FROM admin_request WHERE id = $1 FOR UPDATE', [requestId])).rows[0]
@@ -717,7 +751,7 @@ export async function decideRequest(x: Ctx, who: Who, requestId: string, decisio
     if (decision === 'reject') {
       await c.query("UPDATE admin_request SET status = 'rejected', decided_by = $2, decided_at = now() WHERE id = $1", [requestId, by])
       await appendAudit(c, x.k, { actor: by, action: `request.rejected.${req.kind}`, entity: requestId })
-      return
+      return []
     }
     const staff = await currentStaff(c)
     const adminIds = staff.filter((s) => s.roles.includes('admin')).map((s) => s.userId)
@@ -742,10 +776,13 @@ export async function decideRequest(x: Ctx, who: Who, requestId: string, decisio
     await c.query("UPDATE admin_request SET status = 'approved', decided_by = $2, decided_at = now(), single_admin_exception = $3 WHERE id = $1", [requestId, by, isSingleAdminException(facts)])
     await appendAudit(c, x.k, { actor: by, action: `request.approved.${req.kind}`, entity: requestId })
     for (const m of done.mails ?? []) await ('urgent' in m ? x.mail?.urgent(c, m.urgent, m.m) : x.mail?.queue(c, m))
+    return done.demoFiles ?? []
   }).catch(async (e) => {
     // an approval that was refused is worth recording; the transaction rolled back, so it is written on its own
     if (e instanceof Refused && decision === 'approve') await tx(x.db, (c) => appendAudit(c, x.k, { actor: by, action: 'request.approval_refused', entity: requestId }))
     throw e
   })
+  // the rows and keys are gone with the commit, so a copy left behind can never be read; the expiry job has the queue
+  if (demoFiles.length) await x.dropFiles?.(demoFiles).catch(() => {})
   await x.mail?.flush()
 }

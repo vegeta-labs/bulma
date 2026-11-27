@@ -4,17 +4,18 @@ import type { Draft } from '../lib/draft.ts'
 import { draftAmountToTyped, draftPercentToTyped, draftPriceToTyped } from '../lib/pounds.ts'
 import { safeHttpsUrl, validRichText } from '../lib/richText.ts'
 import { api } from './api.ts'
+import { fileLink, here, pageHref, setAddress } from './browser.ts'
 
 export function go(path: string) {
-  window.history.pushState(null, '', path)
+  setAddress(path)
   window.dispatchEvent(new PopStateEvent('popstate'))
   window.scrollTo(0, 0)
 }
 
 export function usePath() {
-  const [path, setPath] = useState(window.location.pathname)
+  const [path, setPath] = useState(here().path)
   useEffect(() => {
-    const on = () => setPath(window.location.pathname)
+    const on = () => setPath(here().path)
     window.addEventListener('popstate', on)
     return () => window.removeEventListener('popstate', on)
   }, [])
@@ -28,7 +29,7 @@ export function Link({ to, children }: { to: string; children: ReactNode }) {
     go(to)
   }
   return (
-    <a href={to} onClick={open}>
+    <a href={pageHref(to)} onClick={open}>
       {children}
     </a>
   )
@@ -466,7 +467,7 @@ export function FileLinks({ dealId, files }: { dealId: string; files: DealFile[]
     <ul data-testid="file-links">
       {files.map((f) => (
         <li key={f.id}>
-          <a href={`/api/deals/${dealId}/files/${f.id}`} download={f.display_name}>
+          <a {...fileLink(`/api/deals/${dealId}/files/${f.id}`, f.display_name)}>
             {f.display_name}
           </a>{' '}
           <span className="hint">{f.requirement === 'deck' ? 'pitch deck' : 'legal document'}</span>

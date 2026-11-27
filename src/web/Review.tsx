@@ -1,5 +1,6 @@
 // Staff screens for deals: the review queue and page, the content approver's page, and the operator's deal settings.
 // A decision always names the content the person was shown, so a deal that changed meanwhile is refused and not approved unread.
+import { fileLink } from './browser.ts'
 import { useEffect, useState, type FormEvent } from 'react'
 import { type Draft, withEffectiveMinimum } from '../lib/draft.ts'
 import { draftAmountToTyped, draftPercentToTyped, typedAmountToDraft, typedPercentToDraft, typedWhole } from '../lib/pounds.ts'
@@ -105,7 +106,7 @@ function CompanyReview({ id, data, reload }: { id: string; data: ReviewData; rel
       <ul data-testid="investee-documents">
         {i.documents.map((f) => (
           <li key={f.id}>
-            <a href={`/api/review/deals/${id}/investee/files/${f.id}`} download={f.display_name}>
+            <a {...fileLink(`/api/review/deals/${id}/investee/files/${f.id}`, f.display_name)}>
               {f.display_name}
             </a>{' '}
             <span className="hint">{DOCUMENT_WORDS[f.requirement] ?? f.requirement}</span>

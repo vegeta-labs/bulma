@@ -129,7 +129,8 @@ async function build(original: Buffer, warning: string, title: string): Promise<
   // so the work grows with the file, never with what the tree claims to expand to (Codex round 3)
   walkPageTree(source)
   if (source.getPageCount() > COVER_LIMITS.pages) throw new Error('too many pages')
-  const out = await PDFDocument.create()
+  // no library name, link or build time in the file's details, as renderPdf (pdf.ts); only the title and Bulma
+  const out = await PDFDocument.create({ updateMetadata: false })
   out.setTitle(title)
   out.setProducer('Bulma')
   // the warning in the fonts of decision R27, so a Chinese or Polish warning is drawn as written

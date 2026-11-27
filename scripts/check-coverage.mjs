@@ -1,17 +1,21 @@
 // Rules §2 / test plan: every case due at the current milestone must have run and passed. Reads test reports, not source.
 // A case is a table row "| TC-X-01 | ... | D0 |" or "| E2E-01 | ... | D3 |"; its last cell is its milestone.
+// The demo has its own two blocks, S (sandbox demo deal) then P (static demo pack), read from docs/demo-milestone.txt
+// (none / S / P), so demo cases fall due with the demo work whatever the D milestone is (demo plan §6).
 import { existsSync, readFileSync } from 'node:fs'
 import { UNTAGGED } from './untagged-tests.mjs'
 
 const ORDER = ['D0', 'D1', 'D2', 'D3', 'D4', 'D5']
+const DEMO_ORDER = ['none', 'S', 'P']
 const ID = String.raw`(?:TC-[A-Z0-9]+-\d+[a-z]?|E2E-\d+)`
 
-export function dueCases(plan, milestone) {
+export function dueCases(plan, milestone, demo = 'none') {
   const due = []
   for (const line of plan.split('\n')) {
     const m = new RegExp(String.raw`^\| (${ID}) \|.*\| *([^|]+?) *\|$`).exec(line)
     if (!m) continue
     if (ORDER.includes(m[2]) && ORDER.indexOf(m[2]) <= ORDER.indexOf(milestone)) due.push(m[1])
+    else if (DEMO_ORDER.indexOf(m[2]) > 0 && DEMO_ORDER.indexOf(m[2]) <= DEMO_ORDER.indexOf(demo)) due.push(m[1])
   }
   return due
 }
@@ -112,13 +116,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(`invalid milestone "${current}"`)
     process.exit(1)
   }
+  // No file means no demo work has started on this branch
+  const demo = existsSync('docs/demo-milestone.txt') ? readFileSync('docs/demo-milestone.txt', 'utf8').trim() : 'none'
+  if (!DEMO_ORDER.includes(demo)) {
+    console.log(`invalid demo milestone "${demo}"`)
+    process.exit(1)
+  }
   const plan = readFileSync('docs/04_TEST_PLAN.md', 'utf8')
   const unknown = unknownIds(reports, plan)
   if (unknown.length) {
     console.log(`case ids in test names with no row in docs/04_TEST_PLAN.md: ${unknown.join(', ')}`)
     process.exit(1)
   }
-  const due = dueCases(plan, current)
+  const due = dueCases(plan, current, demo)
   if (!due.length) {
     console.log('no cases are due: the test plan could not be read')
     process.exit(1)
@@ -126,7 +136,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const r = results(reports)
   const missing = due.filter((id) => !r.has(id))
   const failed = due.filter((id) => r.has(id) && r.get(id).some((s) => s !== 'passed'))
-  console.log(`milestone ${current}: ${due.length} cases due, ${due.length - missing.length - failed.length} passed`)
+  console.log(`milestone ${current}, demo ${demo}: ${due.length} cases due, ${due.length - missing.length - failed.length} passed`)
   if (missing.length) console.log(`NOT RUN: ${missing.join(', ')}`)
   if (failed.length) console.log(`FAILED: ${failed.join(', ')}`)
   process.exit(missing.length || failed.length ? 1 : 0)

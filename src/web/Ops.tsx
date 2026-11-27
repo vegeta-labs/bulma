@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { money, percent } from '../lib/dealSheet.ts'
 import { typedAmountToDraft } from '../lib/pounds.ts'
 import { api } from './api.ts'
+import { fileLink, pageHref, today } from './browser.ts'
 import { useData } from './DealShared.tsx'
 import { Problem, useRun } from './Investor.tsx'
 import { MoveReceipt } from './Money.tsx'
@@ -146,7 +147,7 @@ interface StaffParticipation {
 }
 
 function ReceiptForm({ p, c, onDone }: { p: StaffParticipation; c: string; onDone: () => void }) {
-  const [f, setF] = useState({ amount: '', date: new Date().toISOString().slice(0, 10), payer: '', account: '' })
+  const [f, setF] = useState({ amount: '', date: today(), payer: '', account: '' })
   const { error, run } = useRun()
   const save = (e: FormEvent) => {
     e.preventDefault()
@@ -272,7 +273,7 @@ export function ReceiptsSection({ dealId }: { dealId: string }) {
                   {p.deed_status === 'sent' && (
                     <>
                       <span className="pill">Deed sent, not yet signed</span>
-                      <a href={`/api/review/participations/${p.id}/deed`} download="deed.pdf">
+                      <a {...fileLink(`/api/review/participations/${p.id}/deed`, 'deed.pdf')}>
                         Download the deed sent
                       </a>
                       <button
@@ -294,7 +295,7 @@ export function ReceiptsSection({ dealId }: { dealId: string }) {
                 </span>
               )}
               {p.deed_status === 'signed' && (
-                <a href={`/api/review/participations/${p.id}/deed`} download="deed.pdf">
+                <a {...fileLink(`/api/review/participations/${p.id}/deed`, 'deed.pdf')}>
                   Download the signed deed
                 </a>
               )}
@@ -465,7 +466,7 @@ export function MoneyDeals() {
       <ul className="list">
         {data.deals.map((d) => (
           <li key={d.id}>
-            <a href={`/money/${d.id}`}>{d.name ?? d.public_code}</a>
+            <a href={pageHref(`/money/${d.id}`)}>{d.name ?? d.public_code}</a>
             <span className="hint">{d.public_code}</span>
           </li>
         ))}

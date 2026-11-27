@@ -13,11 +13,13 @@ export const DEFAULT_PACK = 'uk-fpo-template'
 export const isReservedPackKey = (key: string) => /^uk-.*-template$/.test(key)
 
 const sha = (p: RegimePack) => createHash('sha256').update(JSON.stringify(p)).digest('hex')
+/** The hash a stored pack's `content_sha256` holds. */
+export const packSha256 = sha
 
-export async function insertPack(c: Tx, p: RegimePack, o: { builtIn: boolean; by: string | null }): Promise<string> {
+export async function insertPack(c: Tx, p: RegimePack, o: { builtIn: boolean; by: string | null; demoOnly?: boolean }): Promise<string> {
   const id = randomUUID()
-  await c.query('INSERT INTO regime_pack (id, key, version, regime, content, content_sha256, built_in, added_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)', [
-    id, p.key, p.version, p.regime, JSON.stringify(p), sha(p), o.builtIn, o.by,
+  await c.query('INSERT INTO regime_pack (id, key, version, regime, content, content_sha256, built_in, added_by, demo_only) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', [
+    id, p.key, p.version, p.regime, JSON.stringify(p), sha(p), o.builtIn, o.by, o.demoOnly ?? false,
   ])
   for (const t of p.legal_texts) {
     await c.query('INSERT INTO legal_text (id, pack_id, text_key, variant, version, format, body, required_bold, sha256, is_placeholder) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)', [

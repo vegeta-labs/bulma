@@ -6,6 +6,7 @@ import { textParts } from '../lib/legalText.ts'
 import qrcode from 'qrcode-generator'
 import { bpsToPercent, percentToBps, wholePoundsToMinor, typedWhole } from '../lib/pounds.ts'
 import { api, ApiError, uploadFile, type Blocker } from './api.ts'
+import { fileLink, pageHref } from './browser.ts'
 
 export function Problem({ error }: { error: unknown }) {
   if (!error) return null
@@ -54,7 +55,7 @@ export function Register({ onBack }: { onBack: () => void }) {
       <div className="card narrow">
         <h1>Check your email</h1>
         <p>We sent a link to confirm your address. You will need the password you just chose.</p>
-        {done.sandbox_link && <p>In the sandbox no email leaves. <a href={done.sandbox_link} data-testid="sandbox-link">Open the link here</a>.</p>}
+        {done.sandbox_link && <p>In the sandbox no email leaves. <a href={pageHref(done.sandbox_link)} data-testid="sandbox-link">Open the link here</a>.</p>}
       </div>
     )
   }
@@ -114,7 +115,7 @@ export function TokenPage({ path, token }: { path: string; token: string }) {
       setDone(true)
     })
   }
-  if (done) return <div className="card narrow"><h1>Done</h1><p><a href="/">Continue to sign in</a></p></div>
+  if (done) return <div className="card narrow"><h1>Done</h1><p><a href={pageHref('/')}>Continue to sign in</a></p></div>
   return (
     <form className="card narrow" onSubmit={submit}>
       <h1>{title[path]}</h1>
@@ -135,7 +136,7 @@ export function CheckEmail() {
       <h1>Check your email</h1>
       <p>Open the link we sent you to carry on.</p>
       <Problem error={error} />
-      {sent ? <p role="status" data-testid="resent">A new link is on its way.{sent.sandbox_link && <> <a href={sent.sandbox_link}>Open it here</a> (sandbox).</>}</p>
+      {sent ? <p role="status" data-testid="resent">A new link is on its way.{sent.sandbox_link && <> <a href={pageHref(sent.sandbox_link)}>Open it here</a> (sandbox).</>}</p>
         : <button type="button" className="secondary" onClick={() => run(async () => setSent(await api('/api/account/resend-verification', 'POST')))}>Send the link again</button>}
     </div>
   )
@@ -751,7 +752,7 @@ function CaseRow({ c, reload }: { c: KycRow; reload: () => void }) {
             <p>Account: {detail.owner_name}, {detail.owner_email}. {detail.information_confirmed_at ? 'They confirmed the information is true.' : ''}</p>
             <dl className="details">{Object.entries(detail.fields).map(([k, v]) => <div key={k}><dt>{plain(k)}</dt><dd>{v}</dd></div>)}</dl>
             {detail.parties.length > 0 && <ul>{detail.parties.map((p, i) => <li key={i}>{p.name}, {words(p.kind)}{p.ownership_bps ? `, ${bpsToPercent(p.ownership_bps)}%` : ''}{p.email ? `, ${p.email}` : ''}: {p.verified_at ? `confirmed through their link on ${p.verified_at.slice(0, 10)}` : 'not confirmed'}</li>)}</ul>}
-            <ul data-testid="case-files">{detail.files.map((f) => <li key={f.id}>{plain(f.requirement)}: {f.gone ? `${f.display_name} (gone: sandbox files do not survive a restart)` : <a href={`/api/files/${f.id}`}>{f.display_name}</a>}</li>)}</ul>
+            <ul data-testid="case-files">{detail.files.map((f) => <li key={f.id}>{plain(f.requirement)}: {f.gone ? `${f.display_name} (gone: sandbox files do not survive a restart)` : <a {...fileLink(`/api/files/${f.id}`)}>{f.display_name}</a>}</li>)}</ul>
           </div>
         )}
         {detail && <label>Reason, for sending back or refusing<input value={reason} onChange={(e) => setReason(e.target.value)} /></label>}
@@ -781,7 +782,7 @@ function BankQueue() {
             <div>
               <strong>{b.holder}</strong>, for {b.fields.full_name ?? b.fields.name} ({b.owner_name}){b.has_confirmed ? ', replacing a confirmed account' : ''}
               <p>{Object.entries(b.account_fields).map(([k, v]) => `${plain(k)}: ${v}`).join(', ')}</p>
-              {b.evidence_file ? <a href={`/api/files/${b.evidence_file}`}>Proof of the account</a> : <p className="hint">No proof given.</p>}
+              {b.evidence_file ? <a {...fileLink(`/api/files/${b.evidence_file}`)}>Proof of the account</a> : <p className="hint">No proof given.</p>}
             </div>
             <div className="row">
               <button type="button" onClick={() => run(async () => { await api(`/api/review/bank/${b.id}/decide`, 'POST', { decision: 'confirm' }); reload() })}>Confirm</button>
@@ -840,7 +841,7 @@ export function SandboxOutbox() {
       <p className="hint">No email leaves a sandbox. This is what would have been sent. Links here act on someone's account, so only admins see them.</p>
       <button type="button" className="secondary" onClick={reload}>Refresh</button>
       <ul className="list" data-testid="outbox">
-        {data?.mail.map((m) => <li key={m.id}><div><strong>{m.subject}</strong>, to {m.to_address}{path(m.body) ? <p><a href={path(m.body)}>Open the link</a></p> : <p>{m.body}</p>}</div></li>)}
+        {data?.mail.map((m) => <li key={m.id}><div><strong>{m.subject}</strong>, to {m.to_address}{path(m.body) ? <p><a href={pageHref(path(m.body)!)}>Open the link</a></p> : <p>{m.body}</p>}</div></li>)}
       </ul>
     </Card>
   )

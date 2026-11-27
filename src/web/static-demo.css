@@ -1,0 +1,28 @@
+/* The static demo's banner (plan 05 §5.1); only in the demo build. */
+.demo-bar {
+  padding: 10px 16px;
+  background: var(--info-bg);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 6px;
+}
+.demo-bar p {
+  margin: 0;
+}
+.demo-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.demo-views a[aria-current='page'] {
+  font-weight: 600;
+  color: var(--text-strong);
+  text-decoration: none;
+}
+.demo-note:empty {
+  display: none;
+}
+.demo-note {
+  font-weight: 600;
+  color: var(--warn);
+}

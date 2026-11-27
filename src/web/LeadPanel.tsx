@@ -1,6 +1,7 @@
 // D4 lead panel on screen (chunk 8e): the figures, the investor list with status, who it waits on and days at the step, its
 // filters, and each row's actions with the words the action itself refuses with (R-ADM-02, R-ADM-05, R-ADM-06, R-ADM-11).
 // Nothing here judges: every rule is the server's, and a refusal is shown as the server words it.
+import { fileLink } from './browser.ts'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { money } from '../lib/dealSheet.ts'
 import { STATUS_LABEL, type Status } from '../lib/participation.ts'
@@ -367,8 +368,8 @@ function Row({
         // R-AUD-02: one person's evidence pack for this deal; the server refuses staff with a stake
         <p className="row" data-testid="row-evidence">
           <span>Evidence pack for {r.name}:</span>
-          <a href={`/api/ops/invitations/${r.invitation_id}/evidence.pdf`}>PDF</a>
-          <a href={`/api/ops/invitations/${r.invitation_id}/evidence.json`}>JSON</a>
+          <a {...fileLink(`/api/ops/invitations/${r.invitation_id}/evidence.pdf`)}>PDF</a>
+          <a {...fileLink(`/api/ops/invitations/${r.invitation_id}/evidence.json`)}>JSON</a>
         </p>
       )}
       {!operator && (
@@ -480,7 +481,7 @@ export function LeadPanel({
             ))}
           </ul>
           <p>
-            <a href={operator ? `/api/ops/deals/${dealId}/investors.csv` : `/api/deals/${dealId}/investors.csv`}>Download this list (CSV)</a>
+            <a {...fileLink(operator ? `/api/ops/deals/${dealId}/investors.csv` : `/api/deals/${dealId}/investors.csv`)}>Download this list (CSV)</a>
           </p>
         </>
       )}

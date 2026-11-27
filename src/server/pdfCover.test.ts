@@ -229,3 +229,16 @@ it('TC-GATE-05 counting references is linear: long runs of digits or spaces in a
   expect(await withWarningCover(Buffer.from(await doc.save({ useObjectStreams: false })), 'w', 't')).not.toBeNull()
   expect(Date.now() - started).toBeLessThan(3000)
 })
+
+it('TC-GATE-05 the covered file names only its title and Bulma in its details: no library, link or build time', async () => {
+  const doc = await PDFDocument.create()
+  doc.addPage([300, 300])
+  const out = await PDFDocument.load((await withWarningCover(Buffer.from(await doc.save()), 'w', 'Deal ABC123'))!, { updateMetadata: false })
+  expect([out.getTitle(), out.getProducer(), out.getCreator(), out.getCreationDate(), out.getModificationDate()]).toEqual([
+    'Deal ABC123',
+    'Bulma',
+    undefined,
+    undefined,
+    undefined,
+  ])
+})

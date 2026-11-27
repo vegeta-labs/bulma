@@ -9,6 +9,7 @@ import { platformFee, type FeeConfig } from '../lib/fees.ts'
 import { draftAmountToTyped, draftPercentToTyped, draftPriceToTyped, typedAmountToDraft, typedPercentToDraft, typedPriceToDraft } from '../lib/pounds.ts'
 import { markupToRichText, richTextToMarkup } from '../lib/richText.ts'
 import { api, uploadFile } from './api.ts'
+import { fileLink, openPage } from './browser.ts'
 import {
   CAP_TYPES,
   Changes,
@@ -626,7 +627,7 @@ function Files({ draft, deal, problems, part, refresh }: SectionProps & { refres
   const row = (f: DealFile) => (
     <li key={f.id}>
       <span>
-        <a href={`/api/deals/${deal.id}/files/${f.id}`} download={f.display_name}>
+        <a {...fileLink(`/api/deals/${deal.id}/files/${f.id}`, f.display_name)}>
           {f.display_name}
         </a>
         {f.folder_id && <span className="hint"> in {folderPath(f.folder_id)}</span>}
@@ -812,7 +813,7 @@ function CopyDeal({ dealId }: { dealId: string }) {
   const copy = () =>
     void run(async () => {
       const r = await api<{ id: string }>(`/api/deals/${dealId}/copy`, 'POST', { import_invited: people })
-      window.location.assign(`/deals/${r.id}`)
+      openPage(`/deals/${r.id}`)
     })
   return (
     <section className="card" data-testid="copy-deal">

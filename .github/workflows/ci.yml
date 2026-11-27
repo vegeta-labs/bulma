@@ -47,6 +47,11 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run oracle:selfcheck
       - run: npx playwright install --with-deps chromium
+      # the demo's browser tests serve a scanned pack (e2e-demo/serve.ts); a checkout without the private name list (the
+      # public repository) makes a test archive, never a release file
+      - name: Demo pack for the browser tests
+        run: |
+          if [ -f private/identity-names.txt ]; then npm run demo:pack; else npm run demo:pack -- --without-names; fi
       - name: Tests and due cases
         run: npm run coverage:check
       - name: The README steps work on a Linux host

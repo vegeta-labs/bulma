@@ -1,6 +1,7 @@
 // Operator console for D0. Investor and lead screens arrive with D1 to D4. All text is ours; nothing is inlined (CSP).
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api, ApiError, setCsrf, type Blocker } from './api.ts'
+import { here } from './browser.ts'
 import { CheckEmail, Forgot, InvestorHome, MfaSetup, Register, RetentionSettings, ReviewQueue, SandboxOutbox, TokenPage } from './Investor.tsx'
 import { CountryForm, InvitePage, MyDealPage, MyDeals, MyDocuments, VerifyInstructionPage } from './Invest.tsx'
 import { HoldsSection, LinkApprovals, MoneyDeals, PolicySection, ReceiptsSection, ReceivingAccountSection, TemplateApprovals, TemplateSection } from './Ops.tsx'
@@ -20,9 +21,10 @@ interface Notice { mode: 'sandbox' | 'real'; banner: string | null; version: str
 interface Instance {
   mode: string; regulatory_status: string | null; accountable_person: string | null; accountable_confirmed_on: string | null; active_pack: string; blockers: Blocker[]
   switch_warning: string; accountable_label: string; accountable_note: string
+  demo: 'none' | 'adding' | 'added' | null
 }
 interface Req { id: string; kind: string; status: string; requested_by: string; requested_by_name: string; decided_by_name: string | null; single_admin_exception: boolean; details: Array<{ label: string; value: string }> }
-interface Pack { id: string; key: string; version: number; regime: string; active: boolean; placeholders: string[]; author_note: { as_of: string; text: string; known_open_questions: string[] }; steps: string[] }
+interface Pack { id: string; key: string; version: number; regime: string; demo_only: boolean; active: boolean; placeholders: string[]; author_note: { as_of: string; text: string; known_open_questions: string[] }; steps: string[] }
 interface Person { id: string; email: string; name: string; roles: string[]; disabled_at: string | null; mfa_on: boolean }
 interface Fee { version: number; rate_bps: number; min_minor: string; max_minor: string; surcharge_threshold_minor: string; surcharge_bps: number }
 
@@ -170,6 +172,57 @@ function ModeSection({ version, onChange }: { version: number; onChange: () => v
   )
 }
 
+interface SignIn { as: string; name: string; email: string; password: string }
+
+/** R-DEMO-03, R-DEMO-08: sandbox only; the sign-ins come back once and are kept only on this screen until it is left. */
+function DemoSection({ version, onChange }: { version: number; onChange: () => void }) {
+  const { data, reload } = useLoad<Instance>('/api/instance')
+  useEffect(reload, [version, reload])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+  const [signIns, setSignIns] = useState<SignIn[] | null>(null)
+  if (!data || data.mode !== 'sandbox') return null
+  const add = async () => {
+    setError(null)
+    setBusy(true)
+    try {
+      setSignIns((await api<{ sign_ins: SignIn[] }>('/api/demo-deal', 'POST')).sign_ins)
+      reload()
+      onChange()
+    } catch (x) {
+      setError(x)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Section title="Demo deal">
+      <p>A fictional lead with three deals and four investors at different steps, to try the sandbox with. Everything in it is made up. It is removed when the instance switches to the real mode.</p>
+      {data.demo === 'none' && !signIns && <button type="button" disabled={busy} onClick={add} data-testid="add-demo">Add demo deal</button>}
+      {busy && <p role="status">Adding the demo deal. This takes a few seconds.</p>}
+      {data.demo === 'adding' && !busy && <p data-testid="demo-state">A demo deal is being added.</p>}
+      {data.demo === 'added' && !signIns && <p data-testid="demo-state">The demo deal has been added.</p>}
+      <Problem error={error} />
+      {signIns && (
+        <div data-testid="demo-sign-ins">
+          <p className="warning">These passwords are shown only now. Copy them before you leave this page.</p>
+          <ul className="list">
+            {signIns.map((x) => (
+              <li key={x.email}>
+                <dl className="details">
+                  <div><dt>{x.as}</dt><dd>{x.name}</dd></div>
+                  <div><dt>Email</dt><dd>{x.email}</dd></div>
+                  <div><dt>Password</dt><dd><code>{x.password}</code></dd></div>
+                </dl>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Section>
+  )
+}
+
 function RequestsSection({ me, version, onChange }: { me: User; version: number; onChange: () => void }) {
   const { data, reload } = useLoad<{ requests: Req[] }>('/api/requests')
   const [error, setError] = useState<unknown>(null)
@@ -240,7 +293,7 @@ function PacksSection({ version, onChange }: { version: number; onChange: () => 
         {data?.packs.map((p) => (
           <li key={p.id}>
             <div>
-              <strong>{p.key}</strong> version {p.version}{p.active ? ' (active)' : ''}
+              <strong>{p.key}</strong> version {p.version}{p.active ? ' (active)' : ''}{p.demo_only ? ' (demo deal only)' : ''}
               <p className="hint">{p.author_note.text} As of {p.author_note.as_of}.</p>
               <details><summary>Open questions and steps</summary>
                 <ul>{p.author_note.known_open_questions.map((q) => <li key={q}>{q}</li>)}</ul>
@@ -248,7 +301,7 @@ function PacksSection({ version, onChange }: { version: number; onChange: () => 
               </details>
               {p.placeholders.length > 0 && <p className="hint">{p.placeholders.length} placeholder texts still to replace.</p>}
             </div>
-            {!p.active && <button type="button" className="secondary" onClick={() => activate(p.id)}>Ask to activate</button>}
+            {!p.active && !p.demo_only && <button type="button" className="secondary" onClick={() => activate(p.id)}>Ask to activate</button>}
           </li>
         ))}
       </ul>
@@ -385,9 +438,23 @@ export function App() {
     api<Notice>('/api/instance/notice').then(setNotice, () => setNotice(null))
     loadSession()
   }, [loadSession, version])
-  const out = async () => {
-    await api('/api/logout', 'POST')
-    setUser(null)
+  // a sign-out that did not go through says why, and the person stays signed in (the demo pack's answer is its sentence);
+  // a session that had already ended is signed out, so the sign-in screen shows
+  const [outError, setOutError] = useState<unknown>(null)
+  const out = () => {
+    setOutError(null)
+    const signedOut = (e: unknown) => e instanceof ApiError && e.status === 401
+    api('/api/logout', 'POST').then(
+      () => setUser(null),
+      // the answer may be lost after the server ended the session: ask again, and only a live session keeps the person in
+      (e: unknown) =>
+        signedOut(e)
+          ? setUser(null)
+          : api('/api/session').then(
+              () => setOutError(e),
+              (again: unknown) => (signedOut(again) ? setUser(null) : setOutError(e)),
+            ),
+    )
   }
   const isAdmin = !!user?.roles.includes('admin')
   // the operations page: reviewers and admins (gate canRunOperations; two-step sign-in is already needed for any role here)
@@ -395,7 +462,7 @@ export function App() {
   const path = usePath()
   // read once: a page may take the token out of the address bar (the invitation does), and a re-render must not lose it;
   // it belongs to the page it came with, so moving to another page leaves it behind
-  const [loaded] = useState(() => ({ path: window.location.pathname, token: new URLSearchParams(window.location.search).get('token') }))
+  const [loaded] = useState(() => ({ path: here().path, token: new URLSearchParams(here().search).get('token') }))
   const token = path === loaded.path ? loaded.token : null
   const joining = path === '/join-syndicate' && !!token
   const linkPage = !!token && !joining
@@ -415,6 +482,7 @@ export function App() {
         <span><strong>Bulma</strong> — SPV Workspace</span>
         {user && <span className="row"><span>{user.name}</span><button type="button" className="secondary" onClick={out}>Sign out</button></span>}
       </header>
+      <Problem error={outError} />
       {ready && !linkPage && (
         <nav className="nav" aria-label="Main">
           <Link to="/">Home</Link>
@@ -426,7 +494,7 @@ export function App() {
         </nav>
       )}
       <main>
-        {linkPage ? (path === '/investee' ? <InvesteePage token={token} /> : path === '/invite' ? <InvitePage token={token} signedIn={!!user} /> : path === '/verify-instruction' ? <VerifyInstructionPage token={token} /> : <TokenPage path={window.location.pathname} token={token} />) : (
+        {linkPage ? (path === '/investee' ? <InvesteePage token={token} /> : path === '/invite' ? <InvitePage token={token} signedIn={!!user} /> : path === '/verify-instruction' ? <VerifyInstructionPage token={token} /> : <TokenPage path={here().path} token={token} />) : (
         <>
         {joining && user === null && <p className="card narrow" data-testid="join-signin">Sign in to join the syndicate. If you need to create an account first, open this link again once you have.</p>}
         {user === null && <SignIn sandbox={notice?.mode === 'sandbox'} onIn={(u) => { setUser(u); bump() }} />}
@@ -461,6 +529,7 @@ export function App() {
         {ready && !joining && home && isAdmin && (
           <>
             <ModeSection version={version} onChange={bump} />
+            <DemoSection version={version} onChange={bump} />
             <RequestsSection me={user} version={version} onChange={bump} />
             <PacksSection version={version} onChange={bump} />
             <PeopleSection me={user} version={version} onChange={bump} />

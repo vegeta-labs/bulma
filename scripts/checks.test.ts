@@ -41,7 +41,7 @@ describe('documents', () => {
     expect(findings(names, 'x', 'origin, nodding and coding are fine').length).toBe(0)
   })
   it('TC-CMP-05 the public file list keeps internal records out and publishes the code and English docs', () => {
-    for (const p of ['CLAUDE.md', 'docs/HANDOFF.md', 'docs/PROGRESS.md', 'docs/milestone.txt', 'docs/01_PRD.md', 'docs/04_TEST_PLAN.md', 'docs/review/a.md', 'private/identity-names.txt']) {
+    for (const p of ['CLAUDE.md', 'docs/HANDOFF.md', 'docs/PROGRESS.md', 'docs/milestone.txt', 'docs/demo-milestone.txt', 'docs/01_PRD.md', 'docs/04_TEST_PLAN.md', 'docs/review/a.md', 'private/identity-names.txt']) {
       expect(isDevOnly(p), p).toBe(true)
     }
     for (const p of ['README.md', 'docs/en/README.md', 'docs/en/RELEASE_NOTES.md', 'src/lib/gate.ts', 'scripts/oracle/SCHEMA.md', 'package.json']) {
@@ -61,6 +61,15 @@ describe('due-case reader', () => {
   it('reads the milestone from the last cell and ignores other rows', () => {
     expect(dueCases(plan, 'D0')).toEqual(['TC-A-01', 'E2E-01'])
     expect(dueCases(plan, 'D1')).toEqual(['TC-A-01', 'TC-A-02', 'E2E-01'])
+    // Demo blocks: before S, after S, after P, and with D5 merged in (demo plan §6)
+    const demoPlan = ['| TC-A-01 | R | x | D4 |', '| TC-A-05 | R | x | D5 |', '| TC-D-01 | R | x | S |', '| TC-D-02 | R | x | P |', '| TC-D-03 | R | x | Q |']
+      .join('\n')
+    expect(dueCases(demoPlan, 'D4')).toEqual(['TC-A-01'])
+    expect(dueCases(demoPlan, 'D4', 'none')).toEqual(['TC-A-01'])
+    expect(dueCases(demoPlan, 'D4', 'S')).toEqual(['TC-A-01', 'TC-D-01'])
+    expect(dueCases(demoPlan, 'D4', 'P')).toEqual(['TC-A-01', 'TC-D-01', 'TC-D-02'])
+    expect(dueCases(demoPlan, 'D5', 'S')).toEqual(['TC-A-01', 'TC-A-05', 'TC-D-01'])
+    expect(dueCases(demoPlan, 'D5', 'P')).toEqual(['TC-A-01', 'TC-A-05', 'TC-D-01', 'TC-D-02'])
   })
   it('counts vitest and playwright reports, several ids in one title, and failures', () => {
     const r = results([

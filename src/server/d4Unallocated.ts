@@ -13,6 +13,7 @@ import { staffMoneyTx } from './d4Money.ts'
 import { apply, dealCurrency, hasStake, loadMoney, recordReceipt, save, tellReviewers, TAKES_MONEY } from './ledger.ts'
 import type { MailQueue } from './outbox.ts'
 import { Refused } from './requests.ts'
+import { DEMO_MONEY_APART, sameDemoSide } from '../lib/demo.ts'
 
 export interface D4UnallocatedDeps {
   db: Db
@@ -60,6 +61,8 @@ interface UnallocatedRow {
   outcome: string
   owner: string
   return_requested_by: string | null
+  /** The side of the demo line the money came from (R-DEMO-05). */
+  demo_run: string | null
 }
 
 export function registerD4Unallocated(app: FastifyInstance, d: D4UnallocatedDeps) {
@@ -70,7 +73,7 @@ export function registerD4Unallocated(app: FastifyInstance, d: D4UnallocatedDeps
   async function openRow(c: Tx, id: string): Promise<UnallocatedRow> {
     const r = (
       await c.query<UnallocatedRow>(
-        `SELECT id, currency, amount_minor, to_char(received_on, 'YYYY-MM-DD') AS received_on, payer_name, payer_account, bank_ref, outcome, owner, return_requested_by
+        `SELECT id, currency, amount_minor, to_char(received_on, 'YYYY-MM-DD') AS received_on, payer_name, payer_account, bank_ref, outcome, owner, return_requested_by, demo_run
            FROM unallocated_receipt WHERE id = $1 AND created_at >= ${REAL_SINCE} FOR UPDATE`,
         [id],
       )
@@ -81,11 +84,16 @@ export function registerD4Unallocated(app: FastifyInstance, d: D4UnallocatedDeps
   }
 
   /** A person money can go to: a participation in a deal taking money, with no stake for the one acting, in this currency. */
-  async function target(c: Tx, who: SessionUser, pid: string, currency: string): Promise<void> {
+  async function target(c: Tx, who: SessionUser, pid: string, currency: string, fromRun: string | null): Promise<void> {
     const p = (
-      await c.query<{ deal_id: string; state: string }>('SELECT p.deal_id, d.state FROM participation p JOIN deal d ON d.id = p.deal_id WHERE p.id = $1', [pid])
+      await c.query<{ deal_id: string; state: string; demo_run: string | null }>(
+        'SELECT p.deal_id, d.state, d.demo_run FROM participation p JOIN deal d ON d.id = p.deal_id WHERE p.id = $1',
+        [pid],
+      )
     ).rows[0]
     if (!p) throw new Refused(NOT_FOUND)
+    // R-DEMO-05: the money stays on its side of the demo line
+    if (!sameDemoSide(p.demo_run, fromRun)) throw new Refused(DEMO_MONEY_APART)
     if (!TAKES_MONEY.includes(p.state)) throw new Refused('Money is recorded for a deal only from launch on.')
     if (await hasStake(c, who, p.deal_id)) throw new Refused(STAKE)
     // R-OPS-04: a different currency from the deal's cannot be allocated
@@ -104,22 +112,32 @@ export function registerD4Unallocated(app: FastifyInstance, d: D4UnallocatedDeps
     const rows = (
       await d.db.query<UnallocatedRow & { owner_name: string; created_at: Date; return_basis: string | null }>(
         `SELECT x.id, x.currency, x.amount_minor, to_char(x.received_on, 'YYYY-MM-DD') AS received_on, x.payer_name, x.payer_account, x.bank_ref, x.outcome,
-                x.owner, u.name AS owner_name, x.return_requested_by, x.return_basis, x.created_at
+                x.owner, u.name AS owner_name, x.return_requested_by, x.return_basis, x.created_at, x.demo_run
            FROM unallocated_receipt x JOIN user_account u ON u.id = x.owner
           WHERE x.outcome = 'open' AND x.created_at >= ${REAL_SINCE} ORDER BY x.created_at, x.id`,
       )
     ).rows
     // R-OPS-04: suggestions across every deal still taking commitments, never one the viewer has a stake in
     const people = (
-      await d.db.query<{ id: string; deal_id: string; public_code: string; reference: string; investor: string; cash_due_minor: string; entity_id: string }>(
-        `SELECT p.id, p.deal_id, dl.public_code, p.reference, u.name AS investor, p.cash_due_minor, p.entity_id
+      await d.db.query<{
+        id: string
+        deal_id: string
+        public_code: string
+        reference: string
+        investor: string
+        cash_due_minor: string
+        entity_id: string
+        demo_run: string | null
+      }>(
+        `SELECT p.id, p.deal_id, dl.public_code, p.reference, u.name AS investor, p.cash_due_minor, p.entity_id, dl.demo_run
            FROM participation p JOIN deal dl ON dl.id = p.deal_id JOIN user_account u ON u.id = p.user_id
           WHERE p.outcome = 'active' AND dl.state IN ('live', 'closing_requested', 'closing') AND p.created_at >= ${REAL_SINCE}
           ORDER BY p.join_seq`,
       )
     ).rows
     const candidates: AllocationCandidate[] = []
-    const info = new Map<string, { deal_code: string; reference: string; investor: string }>()
+    const info = new Map<string, { deal_code: string; reference: string; investor: string; demo: boolean }>()
+    const runOf = new Map(people.map((p) => [p.id, p.demo_run]))
     const currencies = new Map<string, string>()
     for (const p of people) {
       if (await hasStake(d.db, who, p.deal_id)) continue
@@ -133,7 +151,7 @@ export function registerD4Unallocated(app: FastifyInstance, d: D4UnallocatedDeps
         )
       ).rows.map((r) => r.name)
       candidates.push({ participation: p.id, currency: currencies.get(p.deal_id)!, owedMinor: BigInt(p.cash_due_minor) - (await heldMinor(d.db, p.id)), names })
-      info.set(p.id, { deal_code: p.public_code, reference: p.reference, investor: p.investor })
+      info.set(p.id, { deal_code: p.public_code, reference: p.reference, investor: p.investor, demo: p.demo_run !== null })
     }
     const now = new Date().toISOString()
     return {
@@ -157,7 +175,12 @@ export function registerD4Unallocated(app: FastifyInstance, d: D4UnallocatedDeps
         days_open: daysOpen(r.created_at.toISOString(), now),
         return_requested_by: r.return_requested_by,
         return_basis: r.return_basis,
-        suggestions: suggestAllocation({ amountMinor: BigInt(r.amount_minor), currency: r.currency, payerName: r.payer_name }, candidates).map((s) => ({
+        demo: r.demo_run !== null,
+        // R-DEMO-05: suggested only on the money's own side of the demo line
+        suggestions: suggestAllocation(
+          { amountMinor: BigInt(r.amount_minor), currency: r.currency, payerName: r.payer_name },
+          candidates.filter((c) => sameDemoSide(runOf.get(c.participation) ?? null, r.demo_run)),
+        ).map((s) => ({
           participation_id: s.participation,
           ...info.get(s.participation)!,
           by_amount: s.byAmount,
@@ -214,7 +237,7 @@ export function registerD4Unallocated(app: FastifyInstance, d: D4UnallocatedDeps
       )
       const receipts: string[] = []
       for (const p of parts) {
-        await target(c, who, p.to, row.currency)
+        await target(c, who, p.to, row.currency, row.demo_run)
         const r = await recordReceipt(c, d.k, d.mail, who.id, {
           participationId: p.to,
           amount: p.amount,
@@ -317,6 +340,9 @@ export function registerD4Unallocated(app: FastifyInstance, d: D4UnallocatedDeps
       )
       if (refusal) throw new Refused(refusal)
       if (parts.some((p) => p.to === src.participation_id)) throw new Refused('The money is already with this person.')
+      const srcRun = (
+        await c.query<{ demo_run: string | null }>('SELECT d.demo_run FROM participation p JOIN deal d ON d.id = p.deal_id WHERE p.id = $1', [src.participation_id])
+      ).rows[0]!.demo_run
       // R-OPS-04: the check runs under the same lock as refund approval, so money approved, sent or refunded cannot move
       await lockAll(c, [src.participation_id, ...parts.flatMap((p) => (p.to ? [p.to] : []))])
       const before = (await loadMoney(c, src.participation_id, true))!
@@ -339,14 +365,15 @@ export function registerD4Unallocated(app: FastifyInstance, d: D4UnallocatedDeps
         if (p.to === null) {
           const u = randomUUID()
           await c.query(
-            `INSERT INTO unallocated_receipt (id, currency, amount_minor, received_on, payer_name, payer_account, from_receipt, owner, entered_by)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
-            [u, src.currency, String(p.amount), src.received_on, src.payer_name, src.payer_account, id, who.id],
+            // R-DEMO-05: the money keeps the side of the person it leaves
+            `INSERT INTO unallocated_receipt (id, currency, amount_minor, received_on, payer_name, payer_account, from_receipt, owner, entered_by, demo_run)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9)`,
+            [u, src.currency, String(p.amount), src.received_on, src.payer_name, src.payer_account, id, who.id, srcRun],
           )
           made.push({ participation_id: null, unallocated: u })
           continue
         }
-        await target(c, who, p.to, src.currency)
+        await target(c, who, p.to, src.currency, srcRun)
         const r = await recordReceipt(c, d.k, d.mail, who.id, {
           participationId: p.to,
           amount: p.amount,

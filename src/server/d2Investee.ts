@@ -139,25 +139,28 @@ const earlierAnswer = async (c: Q, company: string) =>
   (await c.query<{ needs_notarised_signature: boolean | null }>('SELECT needs_notarised_signature FROM investee_company WHERE id = $1', [company])).rows[0]
     ?.needs_notarised_signature ?? null
 
-async function checkedCompany(c: Q, d: SyncDeps, draft: Draft): Promise<string | null> {
+async function checkedCompany(c: Q, d: SyncDeps, draft: Draft, dealId: string): Promise<string | null> {
   const number = draft.company!.registration_number?.trim()
   if (!number || hasTaxRelief(draft)) return null
   const today = d.now().toISOString().slice(0, 10)
   const known = await c.query<{ id: string }>(
-    `SELECT id FROM investee_company WHERE registration_number = $1 AND lower(jurisdiction) = lower($2) AND verified_until >= $3::date AND verified_at >= ${REAL_SINCE} LIMIT 1`,
-    [number, draft.company!.jurisdiction!.trim(), today],
+    `SELECT id FROM investee_company WHERE registration_number = $1 AND lower(jurisdiction) = lower($2) AND verified_until >= $3::date AND verified_at >= ${REAL_SINCE}
+       AND demo_run IS NOT DISTINCT FROM (SELECT demo_run FROM deal WHERE id = $4) LIMIT 1`,
+    [number, draft.company!.jurisdiction!.trim(), today, dealId],
   )
   return known.rows[0]?.id ?? null
 }
 
-async function newCompany(c: Q, draft: Draft): Promise<string> {
+async function newCompany(c: Q, draft: Draft, dealId: string): Promise<string> {
   const co = draft.company!
   const id = randomUUID()
-  await c.query('INSERT INTO investee_company (id, legal_name, jurisdiction, registration_number) VALUES ($1, $2, $3, $4)', [
+  // R-DEMO-05: the company record is on the deal's side of the demo line, so a check is never reused across it
+  await c.query('INSERT INTO investee_company (id, legal_name, jurisdiction, registration_number, demo_run) VALUES ($1, $2, $3, $4, (SELECT demo_run FROM deal WHERE id = $5))', [
     id,
     co.legal_name!.trim(),
     co.jurisdiction!.trim(),
     co.registration_number?.trim() || null,
+    dealId,
   ])
   return id
 }
@@ -197,7 +200,7 @@ export async function syncInvesteeCheck(c: Q, d: SyncDeps, deal: SyncDeal, draft
   const now = d.now().toISOString()
   if (!row) {
     const investee = randomUUID()
-    const known = await checkedCompany(c, d, draft)
+    const known = await checkedCompany(c, d, draft, deal.id)
     if (known) {
       await c.query(
         "INSERT INTO investee (id, deal_id, company_id, contact_version, status, decided_at) VALUES ($1, $2, $3, $4, 'approved', $5::timestamptz)",
@@ -209,7 +212,7 @@ export async function syncInvesteeCheck(c: Q, d: SyncDeps, deal: SyncDeal, draft
     await c.query('INSERT INTO investee (id, deal_id, company_id, contact_version) VALUES ($1, $2, $3, $4)', [
       investee,
       deal.id,
-      await newCompany(c, draft),
+      await newCompany(c, draft, deal.id),
       contactVersion,
     ])
     return askCompany(c, d, deal, draft, investee)
@@ -221,10 +224,10 @@ export async function syncInvesteeCheck(c: Q, d: SyncDeps, deal: SyncDeal, draft
       row.id,
       now,
     ])
-    const known = await checkedCompany(c, d, draft)
+    const known = await checkedCompany(c, d, draft, deal.id)
     await c.query(
       'UPDATE investee SET company_id = $2, status = $3, decided_by = NULL, decided_at = $4::timestamptz, return_reason = NULL, needs_notarised_signature = NULL WHERE id = $1',
-      [row.id, known ?? (await newCompany(c, draft)), known ? 'approved' : 'waiting', known ? now : null],
+      [row.id, known ?? (await newCompany(c, draft, deal.id)), known ? 'approved' : 'waiting', known ? now : null],
     )
     if (!known) return askCompany(c, d, deal, draft, row.id)
     await c.query('UPDATE investee SET needs_notarised_signature = $2 WHERE id = $1', [row.id, await earlierAnswer(c, known)])

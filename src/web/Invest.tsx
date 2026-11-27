@@ -7,6 +7,7 @@ import { COUNTRY_CHOICES, OTHER_COUNTRY } from '../lib/invite.ts'
 import { textParts } from '../lib/legalText.ts'
 import { typedAmountToDraft } from '../lib/pounds.ts'
 import { api } from './api.ts'
+import { fileLink, openPage, openStep, pageHref, setAddress } from './browser.ts'
 import { INSTRUMENTS, Link, RichView, ROUNDS, SHARE_CLASSES, VOTERS, useData } from './DealShared.tsx'
 import { DealUpdates, Differences } from './DealChange.tsx'
 import { Problem, useRun } from './Investor.tsx'
@@ -90,7 +91,7 @@ export function InvitePage({ token, signedIn }: { token: string; signedIn: boole
     api<{ ok: boolean; deal_code: string; preparation: Prep | null }>('/api/invite/open', 'POST', { token }).then(
       (r) => {
         // the token leaves the address bar once the browser holds the invitation (tech design §5)
-        window.history.replaceState(null, '', '/invite')
+        setAddress('/invite', 'replace')
         setState({ ok: true, code: r.deal_code, prep: r.preparation })
       },
       () => setState({ ok: false, message: 'This link does not work. Ask whoever sent it for a new one.' }),
@@ -134,7 +135,7 @@ export function InvitePage({ token, signedIn }: { token: string; signedIn: boole
       )}
       <p className="hint">This page holds no details of any investment.</p>
       <p>
-        <a href="/">{signedIn ? 'Continue' : 'Sign in or create an account'}</a>
+        <a href={pageHref('/')}>{signedIn ? 'Continue' : 'Sign in or create an account'}</a>
       </p>
     </div>
   )
@@ -268,6 +269,7 @@ export function MyDeals() {
     link_unusable: 'This link is no longer in use.',
     deal_not_open: 'This deal is not open.',
     held: 'This deal is not available at the moment.',
+    demo_apart: 'Demo records and ordinary records stay apart: this account cannot take part here.',
   }
   if (!rows) return null
   const group = (k: ListRow['kind']) => rows.filter((r) => r.kind === k)
@@ -780,10 +782,10 @@ function Pay({ p }: { p: Participation }) {
         ))}
       </ul>
       <p>
-        {data.verify_note} <a href={data.verify_url}>Check these details</a>
+        {data.verify_note} <a href={data.verify_url ? pageHref(data.verify_url) : undefined}>Check these details</a>
       </p>
       <p>
-        <a href={`/api/my/participations/${p.id}/instructions.pdf`}>Download as PDF</a>
+        <a {...fileLink(`/api/my/participations/${p.id}/instructions.pdf`)}>Download as PDF</a>
       </p>
       {data.transfer_marked ? (
         <p className="hint">You said you have paid. The operator records money when it arrives.</p>
@@ -858,8 +860,9 @@ function AccountRows({ a }: { a: Record<string, unknown> }) {
 }
 
 function ParticipationCard({ p, c, fpo, dealId, onChange }: { p: Participation; c: string; fpo: boolean; dealId: string; onChange: () => void }) {
-  const [step, setStep] = useState<'none' | 'sheet' | 'pay' | 'change'>('none')
   const signedStates = ['to_pay', 'payment_sent', 'part_paid', 'funded', 'refund_due']
+  // the static demo's payment-step link opens the payment details (openStep is always null in the app)
+  const [step, setStep] = useState<'none' | 'sheet' | 'pay' | 'change'>(() => (openStep() === 'pay' && signedStates.includes(p.status) ? 'pay' : 'none'))
   // the lead's proposal is answered first: a deal sheet or amount change opened before it arrived no longer applies (Codex D4 screens round 1)
   const proposal = p.amount_proposal_open
   useEffect(() => {
@@ -924,7 +927,7 @@ function ParticipationCard({ p, c, fpo, dealId, onChange }: { p: Participation; 
             Payment details
           </button>
         )}
-        {signedStates.includes(p.status) && <a href={`/api/my/participations/${p.id}/signed`}>Signed deal sheet</a>}
+        {signedStates.includes(p.status) && <a {...fileLink(`/api/my/participations/${p.id}/signed`)}>Signed deal sheet</a>}
         {/* the server refuses a change of one's own while the lead's proposal is open: answer that first */}
         {!proposal && (
           <button type="button" className="secondary" onClick={() => setStep('change')}>
@@ -1197,8 +1200,8 @@ export function MyDocuments() {
           <li key={p.id}>
             <span className="mono">{p.deal_code}</span>
             <span className="row">
-              {p.signed && <a href={`/api/my/participations/${p.id}/signed`}>Signed deal sheet</a>}
-              {p.instruction && <a href={`/api/my/participations/${p.id}/instructions.pdf`}>Payment details</a>}
+              {p.signed && <a {...fileLink(`/api/my/participations/${p.id}/signed`)}>Signed deal sheet</a>}
+              {p.instruction && <a {...fileLink(`/api/my/participations/${p.id}/instructions.pdf`)}>Payment details</a>}
               {p.held && <span className="warning">Do not send money for this deal at the moment.</span>}
             </span>
             {/* R-PAY-07: reachable without the deal page, which closes when, say, the investor statement expires (Codex D4 screens round 1) */}
@@ -1312,7 +1315,7 @@ export function MyDealPage({ id }: { id: string }) {
             <ul>
               {data.documents.map((f) => (
                 <li key={f.id}>
-                  <a href={`/api/my/deals/${id}/files/${f.id}`}>{f.display_name}</a>
+                  <a {...fileLink(`/api/my/deals/${id}/files/${f.id}`)}>{f.display_name}</a>
                 </li>
               ))}
             </ul>
@@ -1330,7 +1333,7 @@ export function MyDealPage({ id }: { id: string }) {
           <button
             type="button"
             className="secondary"
-            onClick={() => void pass.run(async () => (await api(`/api/my/deals/${id}/pass`, 'POST', {}), window.location.assign('/')))}
+            onClick={() => void pass.run(async () => (await api(`/api/my/deals/${id}/pass`, 'POST', {}), openPage('/')))}
           >
             I will not invest
           </button>

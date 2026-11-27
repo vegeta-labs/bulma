@@ -9,6 +9,8 @@ import { insertPack, packContent } from '../store/packs.ts'
 import { createTestDb, type TestDb } from '../store/testdb.ts'
 import { buildServer } from './app.ts'
 import { bootstrapAdmin, createUser, grantRole } from './auth.ts'
+import { afterEach } from 'vitest'
+import { addDemoAccounts, beginDemoRun, endDemoRun, type DemoAccount, type DemoRun as DemoRunHandle } from './demo.ts'
 import { attemptOne, drain, enqueue, mailQueue, type OutboxDeps, type QueuedMail } from './outbox.ts'
 import { runReminders } from './reminders.ts'
 import { FakeOutbox, MemoryStorage } from '../adapters/index.ts'
@@ -7279,6 +7281,312 @@ describe('D4 retention: the person, the deal and the transaction clocks (R-KYC-0
     expect(typed.json().differs_from_source).toBe(true)
   })
 
+})
+
+describe('demo records and ordinary records stay apart (R-DEMO-05)', () => {
+  // earlier blocks move the clock and end sessions: these tests start from fresh ones
+  beforeAll(async () => {
+    clock = new Date('2026-11-10T09:00:00.000Z')
+    plainLead = await person(unique('plain-lead'))
+    reviewer = await login('reviewer@example.test')
+  })
+  let plainLead: Client
+  /** A seed run with its accounts, as the seed makes them; the run stays open while the test acts (clearing it is TC-DEMO-04). */
+  async function demoRun() {
+    await t.owner.query("UPDATE demo_run SET state = 'retired', finished_at = clock_timestamp() WHERE state <> 'retired'")
+    await t.owner.query('UPDATE instance_profile SET demo_adding = NULL WHERE id = 1')
+    const run = await beginDemoRun(t.app, t.keyring, { by: admin.id, via: 'button' })
+    open_ = run
+    const accounts = await addDemoAccounts(t.app, t.keyring, run.id, admin.id)
+    return { run: run.id, accounts }
+  }
+  // the run holds its lock until it ends; each test ends its own
+  let open_: DemoRunHandle | null = null
+  afterEach(async () => {
+    if (open_) await endDemoRun(t.app, t.keyring, open_, { ok: true })
+    open_ = null
+  })
+  async function signIn(a: DemoAccount, cookie?: string): Promise<Client> {
+    const r = await inject('POST', '/api/login', undefined, { email: a.email, password: a.password }, cookie)
+    expect(r.statusCode, r.body).toBe(200)
+    // the browser keeps the invitation cookie it holds, as a person who signs in after opening a link (R-LNK-10)
+    const session = `bulma_session=${r.cookies.find((c) => c.name === 'bulma_session')!.value}`
+    return { cookie: cookie ? `${session}; ${cookie}` : session, csrf: r.json().csrf, id: r.json().user.id, email: a.email }
+  }
+  const runOf = async (table: 'deal' | 'syndicate' | 'investee_company', id: string) =>
+    (await t.owner.query<{ demo_run: string | null }>(`SELECT demo_run FROM ${table} WHERE id = $1`, [id])).rows[0]!.demo_run
+  const APART = 'Demo records and ordinary records stay apart: this account cannot take part here.'
+  const MONEY_APART = 'Demo money and ordinary money stay apart: it cannot go there.'
+  const MIXED = 'This statement has payments for demo deals and for ordinary deals. Import them as two separate files.'
+  const DEMO_RETIRED_STATEMENT = 'This statement has lines a removed demo deal already took. Upload a statement without them.'
+
+  it('TC-DEMO-05 invitation, link and commitment refuse across the line both ways; the demo lead’s own deal and syndicate are demo; a reviewer may review it', async () => {
+    const { run, accounts } = await demoRun()
+    const demoLead = await signIn(accounts.lead)
+    // made through the ordinary routes, reviewed and approved by an ordinary reviewer with two-step sign-in (a staff act)
+    const demoDeal = await liveDeal(demoLead)
+    const ordinaryDeal = await liveDeal(plainLead)
+    expect(await runOf('deal', demoDeal)).toBe(run)
+    expect(await runOf('deal', ordinaryDeal)).toBeNull()
+    const syndicate = (await t.owner.query<{ syndicate_id: string }>('SELECT syndicate_id FROM deal WHERE id = $1', [demoDeal])).rows[0]!.syndicate_id
+    expect(await runOf('syndicate', syndicate)).toBe(run)
+    // the lead's own next deal and syndicate, made by hand, are demo as well
+    const next = (await inject('POST', '/api/deals', demoLead, {})).json().id as string
+    expect(await runOf('deal', next)).toBe(run)
+    const ent = await newEntity(demoLead, accounts.lead.name)
+    const own = await inject('POST', '/api/syndicates', demoLead, { name: 'Capsule Friends', lead_entity_id: ent })
+    expect(own.statusCode, own.body).toBe(200)
+    expect(await runOf('syndicate', own.json().id)).toBe(run)
+
+    // an ordinary person with the demo deal's link: refused, and the invitation is spent
+    const demoLink = (await links(demoDeal, demoLead)).find((l) => l.is_default && l.carry_bps === 2000)!.id
+    const ordinary = await person(unique('plain'), await open(tokenOf(await urlOf(demoDeal, demoLink, demoLead))))
+    expect((await inject('POST', '/api/invite/accept', ordinary, {})).json().results).toEqual([{ deal_code: expect.any(String), result: 'demo_apart' }])
+    expect((await inject('POST', '/api/invite/accept', ordinary, {})).json().results).toEqual([])
+    // a demo investor with the ordinary deal's link: refused; with the demo deal's link: in
+    const ordinaryLink = (await links(ordinaryDeal, plainLead)).find((l) => l.is_default && l.carry_bps === 2000)!.id
+    const goku = accounts.investors[0]!
+    const g = await signIn(goku, await open(tokenOf(await urlOf(ordinaryDeal, ordinaryLink, plainLead))))
+    expect((await inject('POST', '/api/invite/accept', g, {})).json().results).toEqual([{ deal_code: expect.any(String), result: 'demo_apart' }])
+    const g2 = await signIn(goku, await open(tokenOf(await urlOf(demoDeal, demoLink, demoLead))))
+    expect((await inject('POST', '/api/invite/accept', g2, {})).json().results).toEqual([{ deal_code: expect.any(String), result: 'invited' }])
+
+    // a commitment across the line is refused in words before anything else is looked at
+    const oEnt = await newEntity(ordinary)
+    // no quote can be had across the line, so what a screen would send is made up: the refusal comes first anyway
+    const shown = { quoted_due_minor: '1000000', terms_link_id: randomUUID() }
+    const c1 = await commit(ordinary, demoDeal, oEnt, '1000000', shown)
+    expect([c1.statusCode, c1.json().error]).toEqual([409, APART])
+    const gEnt = await newEntity(g2, goku.name)
+    const c2 = await commit(g2, ordinaryDeal, gEnt, '1000000', shown)
+    expect([c2.statusCode, c2.json().error]).toEqual([409, APART])
+
+    // a syndicate link across the line: refused both ways, nobody joins
+    const inviteTo = async (synd: string, who: Client) => tokenOf((await inject('POST', `/api/syndicates/${synd}/invites`, who, { role: 'deal_member' })).json().link)
+    const s1 = await inject('POST', '/api/syndicate-invites/accept', ordinary, { token: await inviteTo(syndicate, demoLead) })
+    expect([s1.statusCode, s1.json().error]).toEqual([409, APART])
+    const ordinarySyndicate = (await t.owner.query<{ syndicate_id: string }>('SELECT syndicate_id FROM deal WHERE id = $1', [ordinaryDeal])).rows[0]!.syndicate_id
+    const s2 = await inject('POST', '/api/syndicate-invites/accept', g2, { token: await inviteTo(ordinarySyndicate, plainLead) })
+    expect([s2.statusCode, s2.json().error]).toEqual([409, APART])
+    expect(await count('SELECT count(*) AS n FROM syndicate_member WHERE user_id = ANY($1::uuid[])', [[ordinary.id, g2.id]])).toBe(0)
+
+    // the database refuses whatever path forgets: a person, a deal's syndicate, a company, across the line
+    const plainLink = (await t.owner.query<{ id: string }>('SELECT id FROM invite_link WHERE deal_id = $1 LIMIT 1', [ordinaryDeal])).rows[0]!.id
+    await expect(
+      t.owner.query('INSERT INTO deal_invitation (id, deal_id, user_id, invite_link) VALUES ($1, $2, $3, $4)', [randomUUID(), ordinaryDeal, g2.id, plainLink]),
+    ).rejects.toThrow('demo and ordinary records stay apart')
+    await expect(t.owner.query("INSERT INTO deal_member (deal_id, user_id, role) VALUES ($1, $2, 'member')", [demoDeal, ordinary.id])).rejects.toThrow(
+      'demo and ordinary records stay apart',
+    )
+    await expect(t.owner.query("INSERT INTO syndicate_member (syndicate_id, user_id, role) VALUES ($1, $2, 'deal_member')", [ordinarySyndicate, g2.id])).rejects.toThrow(
+      'demo and ordinary records stay apart',
+    )
+    await expect(t.owner.query('UPDATE deal SET syndicate_id = $2 WHERE id = $1', [next, ordinarySyndicate])).rejects.toThrow('demo and ordinary records stay apart')
+    const plainCompany = (await t.owner.query<{ company_id: string }>('SELECT company_id FROM investee WHERE deal_id = $1', [ordinaryDeal])).rows[0]!.company_id
+    await expect(t.owner.query('UPDATE investee SET company_id = $2 WHERE deal_id = $1', [demoDeal, plainCompany])).rejects.toThrow(
+      'demo and ordinary records stay apart',
+    )
+
+    // R-DEMO-05 exception: reviewing is a staff act, so the ordinary reviewer did it above; an admin alone cannot
+    const adminOnly = await staff(unique('adm'), ['admin'])
+    const third = (await inject('POST', '/api/deals', demoLead, {})).json().id as string
+    expect((await inject('POST', `/api/review/deals/${third}/approve`, adminOnly, { reviewed_sha256: 'x'.repeat(64) })).statusCode).toBe(403)
+  })
+
+  it('TC-DEMO-05 a company check is never reused across the line', async () => {
+    const { run, accounts } = await demoRun()
+    const demoLead = await signIn(accounts.lead)
+    const number = `DEMO${++n}`
+    const checked = randomUUID()
+    await t.owner.query(
+      "INSERT INTO investee_company (id, legal_name, jurisdiction, registration_number, verified_at, verified_until) VALUES ($1, 'Seedling Ltd', 'England and Wales', $2, now(), '2030-01-01')",
+      [checked, number],
+    )
+    const submitted = async (who: Client) => {
+      const e = await newEntity(who)
+      const id = (await inject('POST', '/api/deals', who, {})).json().id as string
+      const draft = draftFor(e, {
+        company: { legal_name: 'Seedling Ltd', contact_name: 'Sam Founder', contact_email: 'sam.founder@example.test', jurisdiction: 'England and Wales', registration_number: number },
+      })
+      expect((await inject('PUT', `/api/deals/${id}/draft`, who, draft)).statusCode).toBe(200)
+      await t.owner.query(
+        "INSERT INTO stored_file (id, scope, owner_id, requirement, display_name, content_type, sha256, size_bytes, scan_status, storage_key, key_id, wrapped_key, uploaded_by) SELECT $1, 'deal_shared', d.id, 'legal', 'a.pdf', 'application/pdf', 'x', 1, 'clean', 'k', 'k1', '\\x00', d.lead_user FROM deal d WHERE d.id = $2",
+        [randomUUID(), id],
+      )
+      const r = await inject('POST', `/api/deals/${id}/submit`, who, {})
+      expect(r.statusCode, r.body).toBe(200)
+      return (await t.owner.query<{ company_id: string; status: string }>('SELECT company_id, status FROM investee WHERE deal_id = $1', [id])).rows[0]!
+    }
+    expect(await submitted(plainLead)).toEqual({ company_id: checked, status: 'approved' })
+    const demo = await submitted(demoLead)
+    expect(demo.company_id).not.toBe(checked)
+    expect(demo.status).toBe('waiting')
+    expect(await runOf('investee_company', demo.company_id)).toBe(run)
+    // and the demo record is not reused by the ordinary side either, once checked
+    await t.owner.query("UPDATE investee_company SET verified_at = now(), verified_until = '2031-01-01' WHERE id = $1", [demo.company_id])
+    await t.owner.query("UPDATE investee_company SET verified_until = '2026-01-01' WHERE id = $1", [checked])
+    expect((await submitted(plainLead)).company_id).not.toBe(demo.company_id)
+  })
+
+  it('TC-DEMO-05 money never crosses the line: a statement is on one side (both refused), unallocated money keeps its side, demo money never leaves it', async () => {
+    const { run, accounts } = await demoRun()
+    const demoLead = await signIn(accounts.lead)
+    const demoDeal = await liveDeal(demoLead)
+    const krillin = accounts.investors[2]!
+    const demoLink = (await links(demoDeal, demoLead)).find((l) => l.is_default && l.carry_bps === 2000)!.id
+    const k = await signIn(krillin, await open(tokenOf(await urlOf(demoDeal, demoLink, demoLead))))
+    expect((await inject('POST', '/api/invite/accept', k, {})).json().results).toEqual([{ deal_code: expect.any(String), result: 'invited' }])
+    await qualify(k, krillin.name)
+    const kEnt = await newEntity(k, krillin.name)
+    await passKyc(kEnt)
+    expect((await commit(k, demoDeal, kEnt, '1000000')).statusCode).toBe(200)
+    const demoP = await pid(k, demoDeal)
+    const ref = (await t.owner.query<{ reference: string }>('SELECT reference FROM participation WHERE id = $1', [demoP])).rows[0]!.reference
+    const ordinaryDeal = await liveDeal(plainLead)
+    const plain = await investor(ordinaryDeal, { leader: plainLead })
+    expect((await commit(plain.u, ordinaryDeal, plain.entity, '1000000')).statusCode).toBe(200)
+    const plainP = await pid(plain.u, ordinaryDeal)
+
+    const plainRef = (await t.owner.query<{ reference: string }>('SELECT reference FROM participation WHERE id = $1', [plainP])).rows[0]!.reference
+    const account = ((await inject('GET', '/api/review/receiving-accounts', reviewer)).json().accounts as Array<{ account: string; currency: string }>).find(
+      (a) => a.currency === 'GBP',
+    )!.account
+    const statement = (lines: Array<[string, string]>) =>
+      inject('POST', '/api/review/statement-imports', reviewer, {
+        account,
+        csv: ['transaction_id,date,amount,payer,reference', ...lines.map(([payer, r]) => `DEMO-${randomUUID()},2026-11-10,10.00,${payer},${r}`)].join('\n'),
+      })
+    const sideOf = async (imp: string) => (await t.owner.query<{ demo_run: string | null }>('SELECT demo_run FROM goten_import WHERE id = $1', [imp])).rows[0]!.demo_run
+
+    // a statement with people from both sides is refused whole: nothing is staged
+    const before = await count('SELECT count(*) AS n FROM goten_import')
+    const mixed = await statement([
+      ['Krillin', ref],
+      ['Fay', plainRef],
+    ])
+    expect([mixed.statusCode, mixed.json().error]).toEqual([409, MIXED])
+    expect(await count('SELECT count(*) AS n FROM goten_import')).toBe(before)
+
+    // a statement of the demo side matches the demo person and records to them; its unmatched line is demo money
+    const demoImp = await statement([
+      ['Krillin', ref],
+      // the payer's name finds the demo person as a suggestion, the reference finds nobody
+      ['Krillin', 'NO-SUCH-REF'],
+    ])
+    expect(demoImp.statusCode, demoImp.body).toBe(200)
+    const di = demoImp.json().import_id as string
+    expect(await sideOf(di)).toBe(run)
+    expect(demoImp.json().rows).toMatchObject([
+      { kind: 'match', participation_id: demoP },
+      { kind: 'unallocated', participation_id: null },
+    ])
+    expect((await inject('POST', `/api/review/imports/${di}/rows/1`, reviewer, { decision: 'record' })).statusCode).toBe(200)
+    expect(await count('SELECT count(*) AS n FROM receipt WHERE participation_id = $1', [demoP])).toBe(1)
+    const toList = await inject('POST', `/api/review/imports/${di}/rows/2`, reviewer, { decision: 'unallocated' })
+    expect(toList.statusCode, toList.body).toBe(200)
+    const demoMoney = toList.json().unallocated_id as string
+
+    // an ordinary statement is ordinary; a line pointed at the demo person by any path is refused by the database, and
+    // checked again when a person decides
+    const plainImp = await statement([['Fay', plainRef]])
+    const pi = plainImp.json().import_id as string
+    expect(await sideOf(pi)).toBeNull()
+    await expect(t.owner.query('UPDATE goten_import_row SET participation_id = $2 WHERE import_id = $1 AND n = 1', [pi, demoP])).rejects.toThrow(
+      'demo and ordinary records stay apart',
+    )
+    await t.owner.query('ALTER TABLE goten_import_row DISABLE TRIGGER goten_import_row_demo_boundary')
+    try {
+      await t.owner.query('UPDATE goten_import_row SET participation_id = $2 WHERE import_id = $1 AND n = 1', [pi, demoP])
+    } finally {
+      await t.owner.query('ALTER TABLE goten_import_row ENABLE TRIGGER goten_import_row_demo_boundary')
+    }
+    const late = await inject('POST', `/api/review/imports/${pi}/rows/1`, reviewer, { decision: 'record' })
+    expect([late.statusCode, late.json().error]).toEqual([409, MONEY_APART])
+    expect(await count('SELECT count(*) AS n FROM receipt WHERE participation_id = $1', [demoP])).toBe(1)
+
+    // unallocated money keeps its side: suggestions and allocation only on that side, both ways
+    const plainMoney = await inject('POST', '/api/review/unallocated', reviewer, {
+      currency: 'GBP',
+      amount_minor: '1000',
+      received_on: '2026-11-10',
+      payer_name: 'Krillin',
+      payer_account: 'unknown',
+    })
+    expect(plainMoney.statusCode, plainMoney.body).toBe(200)
+    const list = (await inject('GET', '/api/review/unallocated', reviewer)).json()
+    const rowOf = (id: string) => list.rows.find((r: { id: string }) => r.id === id)
+    const suggested = (id: string) => rowOf(id).suggestions.map((x: { participation_id: string }) => x.participation_id)
+    expect([rowOf(plainMoney.json().id).demo, rowOf(demoMoney).demo]).toEqual([false, true])
+    expect(suggested(plainMoney.json().id)).not.toContain(demoP)
+    expect(suggested(demoMoney)).toContain(demoP)
+    expect(suggested(demoMoney)).not.toContain(plainP)
+    const flag = (p: string) => list.people.find((x: { participation_id: string }) => x.participation_id === p).demo
+    expect([flag(demoP), flag(plainP)]).toEqual([true, false])
+    const allocate = (u: string, to: string) =>
+      inject('POST', `/api/review/unallocated/${u}/allocate`, reviewer, { parts: [{ participation_id: to, amount_minor: '1000' }] })
+    for (const [u, to] of [
+      [plainMoney.json().id, demoP],
+      [demoMoney, plainP],
+    ]) {
+      const a = await allocate(u, to)
+      expect([a.statusCode, a.json().error]).toEqual([409, MONEY_APART])
+    }
+    expect((await allocate(demoMoney, demoP)).statusCode).toBe(200)
+
+    // demo money recorded by hand: to an ordinary person refused; to the unallocated list it stays demo money
+    const rec = await inject('POST', `/api/review/participations/${demoP}/receipts`, reviewer, {
+      amount_minor: '1000',
+      received_on: '2026-11-10',
+      payer_name: 'Krillin',
+      payer_account: '12345678',
+    })
+    expect(rec.statusCode, rec.body).toBe(200)
+    const move = (to: string | null) =>
+      inject('POST', `/api/review/receipts/${rec.json().id}/move`, reviewer, { parts: [{ participation_id: to, amount_minor: '1000' }], reason: 'Paid to the wrong deal.' })
+    const m = await move(plainP)
+    expect([m.statusCode, m.json().error]).toEqual([409, MONEY_APART])
+    const back = await move(null)
+    expect(back.statusCode, back.body).toBe(200)
+    expect(
+      (await t.owner.query<{ demo_run: string | null }>('SELECT demo_run FROM unallocated_receipt WHERE from_receipt = $1', [rec.json().id])).rows[0]!.demo_run,
+    ).toBe(run)
+
+    // the same file uploaded again after only its demo line was recorded: still the demo side, so its other line cannot
+    // reach an ordinary person (Codex r1 #1)
+    const again = ['transaction_id,date,amount,payer,reference', `DEMO-${randomUUID()},2026-11-11,10.00,Krillin,${ref}`, `DEMO-${randomUUID()},2026-11-11,10.00,Someone,NO-SUCH-REF`].join('\n')
+    const once = await inject('POST', '/api/review/statement-imports', reviewer, { account, csv: again })
+    expect(once.statusCode, once.body).toBe(200)
+    expect((await inject('POST', `/api/review/imports/${once.json().import_id}/rows/1`, reviewer, { decision: 'record' })).statusCode).toBe(200)
+    const twice = await inject('POST', '/api/review/statement-imports', reviewer, { account, csv: again })
+    expect(twice.statusCode, twice.body).toBe(200)
+    expect(twice.json().already_imported).toEqual([2])
+    expect(await sideOf(twice.json().import_id)).toBe(run)
+    // and an ordinary line uploaded with it now is both sides at once: refused whole
+    const withPlain = await inject('POST', '/api/review/statement-imports', reviewer, { account, csv: `${again}\nPLAIN-${randomUUID()},2026-11-11,10.00,Fay,${plainRef}` })
+    expect([withPlain.statusCode, withPlain.json().error]).toEqual([409, MIXED])
+    // a skipped line counts too: it was taken by the demo import, so the file stays demo (Codex r2 #1)
+    const skipped = ['transaction_id,date,amount,payer,reference', `DEMO-${randomUUID()},2026-11-12,10.00,Krillin,${ref}`, `DEMO-${randomUUID()},2026-11-12,10.00,Someone,NO-SUCH-REF`].join('\n')
+    const s1 = await inject('POST', '/api/review/statement-imports', reviewer, { account, csv: skipped })
+    expect(await sideOf(s1.json().import_id)).toBe(run)
+    expect((await inject('POST', `/api/review/imports/${s1.json().import_id}/rows/1`, reviewer, { decision: 'skip' })).statusCode).toBe(200)
+    const s2 = await inject('POST', '/api/review/statement-imports', reviewer, { account, csv: skipped })
+    expect(s2.statusCode, s2.body).toBe(200)
+    expect(s2.json().already_imported).toEqual([2])
+    expect(await sideOf(s2.json().import_id)).toBe(run)
+    // an ordinary file uploaded again stays ordinary
+    const plainFile = ['transaction_id,date,amount,payer,reference', `PLAIN-${randomUUID()},2026-11-12,10.00,Fay,${plainRef}`, `PLAIN-${randomUUID()},2026-11-12,10.00,Someone,NO-SUCH-REF`].join('\n')
+    const p1 = await inject('POST', '/api/review/statement-imports', reviewer, { account, csv: plainFile })
+    expect((await inject('POST', `/api/review/imports/${p1.json().import_id}/rows/1`, reviewer, { decision: 'skip' })).statusCode).toBe(200)
+    const p2 = await inject('POST', '/api/review/statement-imports', reviewer, { account, csv: plainFile })
+    expect(p2.statusCode, p2.body).toBe(200)
+    expect(await sideOf(p2.json().import_id)).toBeNull()
+    // once the run is retired its imports are hidden: a file with a line one of them took is refused, not taken as ordinary
+    await endDemoRun(t.app, t.keyring, open_!, { ok: false, failure: 'retired for the test' })
+    open_ = null
+    const gone = await inject('POST', '/api/review/statement-imports', reviewer, { account, csv: skipped })
+    expect([gone.statusCode, gone.json().error]).toEqual([409, DEMO_RETIRED_STATEMENT])
+    expect((await inject('POST', '/api/review/statement-imports', reviewer, { account, csv: plainFile })).statusCode).toBe(200)
+  })
 })
 
 describe('the access matrix, every route from the route table (TC-AUTHZ-01, TC-AUTHZ-02, R-AUD-03, R-KYC-03)', () => {

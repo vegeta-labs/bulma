@@ -29,6 +29,7 @@ import { staffMoneyTx } from './d4Money.ts'
 import { dealCurrency, hasStake, loadMoney, NO_ACCOUNT, recordReceipt, reverseReceipt, TAKES_MONEY } from './ledger.ts'
 import type { MailQueue } from './outbox.ts'
 import { Refused } from './requests.ts'
+import { DEMO_MIXED_STATEMENT, DEMO_MONEY_APART, DEMO_RETIRED_STATEMENT, sameDemoSide, statementSide } from '../lib/demo.ts'
 
 export interface D4ImportDeps {
   db: Db
@@ -118,6 +119,8 @@ interface ImportRow {
   decision: string | null
   // from goten_import
   import_kind: 'statement' | 'ledger'
+  /** The import's side of the demo line (R-DEMO-05). */
+  demo_run: string | null
   scope: string
   currency: string
   ledger_id: string | null
@@ -148,11 +151,11 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
   async function stage(
     c: Tx,
     who: SessionUser,
-    head: { kind: 'statement' | 'ledger'; scope: string; currency: string; ledgerId: string | null; csv: string },
+    head: { kind: 'statement' | 'ledger'; scope: string; currency: string; ledgerId: string | null; csv: string; demoRun: string | null },
     rows: StagedRow[],
   ): Promise<string> {
     const id = randomUUID()
-    await c.query('INSERT INTO goten_import (id, kind, scope, currency, ledger_id, file_sha256, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)', [
+    await c.query('INSERT INTO goten_import (id, kind, scope, currency, ledger_id, file_sha256, uploaded_by, demo_run) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)', [
       id,
       head.kind,
       head.scope,
@@ -160,6 +163,7 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
       head.ledgerId,
       sha(head.csv),
       who.id,
+      head.demoRun,
     ])
     let n = 0
     for (const r of rows) {
@@ -206,8 +210,8 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
       const holders: ReferenceHolder[] = []
       const currencies = new Map<string, string>()
       const people = (
-        await c.query<{ id: string; deal_id: string; reference: string; state: string }>(
-          `SELECT p.id, p.deal_id, p.reference, dl.state FROM participation p JOIN deal dl ON dl.id = p.deal_id WHERE p.created_at >= ${REAL_SINCE}`,
+        await c.query<{ id: string; deal_id: string; reference: string; state: string; demo_run: string | null }>(
+          `SELECT p.id, p.deal_id, p.reference, dl.state, dl.demo_run FROM participation p JOIN deal dl ON dl.id = p.deal_id WHERE p.created_at >= ${REAL_SINCE}`,
         )
       ).rows
       for (const p of people) {
@@ -219,6 +223,24 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
       const first = reviewStatement({ lines: parsed.lines, accountCurrency: acct.currency, scope: acct.account, holders, known, receipts: [] })
       if (first.errors.length) return { errors: first.errors }
       const matched = [...new Set(first.rows.flatMap((r) => (r.kind === 'match' ? [r.participation] : [])))]
+      // R-DEMO-05: the statement is on the side of the people it matches; both sides at once is refused whole. A line
+      // remembered from an earlier upload, recorded or skipped, keeps counting for the side of the import that took it, so
+      // the same file uploaded again cannot leave its other lines on the other side (Codex r1 #1, r2 #1)
+      const runOf = new Map(people.map((p) => [p.id, p.demo_run]))
+      const remembered = first.rows.flatMap((r) => (r.kind === 'already_imported' ? [sha(r.key)] : []))
+      const rememberedSides = remembered.length
+        ? (
+            await c.query<{ demo_run: string | null; hidden: boolean }>(
+              `SELECT g.demo_run, g.id IS NULL AS hidden FROM imported_line l LEFT JOIN goten_import g ON g.id = l.import_id
+               WHERE l.scope = $1 AND l.key_sha256 = ANY($2::text[])`,
+              [acct.account, remembered],
+            )
+          ).rows
+        : []
+      // the import of a retired run is hidden from the app: what the file was cannot be told, so it is not guessed
+      if (rememberedSides.some((r) => r.hidden)) throw new Refused(DEMO_RETIRED_STATEMENT)
+      const side = statementSide([...matched.map((m) => runOf.get(m)!), ...rememberedSides.map((r) => r.demo_run)])
+      if (!side) throw new Refused(DEMO_MIXED_STATEMENT)
       const review = reviewStatement({
         lines: parsed.lines,
         accountCurrency: acct.currency,
@@ -244,7 +266,7 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
             ? [{ kind: 'unallocated' as const, line: byLine.get(r.line)!, key: r.key, proposal: { reason: r.reason, possible_duplicate: r.possibleDuplicate } }]
             : [],
       )
-      const id = await stage(c, who, { kind: 'statement', scope: acct.account, currency: acct.currency, ledgerId: null, csv: b.csv }, staged)
+      const id = await stage(c, who, { kind: 'statement', scope: acct.account, currency: acct.currency, ledgerId: null, csv: b.csv, demoRun: side.side }, staged)
       return {
         import_id: id,
         currency: acct.currency,
@@ -324,7 +346,7 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
       }))
       const review = reviewLedger({ lines: parsed.lines, scope, prior, receipts: await storedReceipts(c, pids) })
       const byLine = new Map(parsed.lines.map((l) => [l.line, l]))
-      const id = await stage(c, who, { kind: 'ledger', scope, currency, ledgerId, csv: b.csv }, [
+      const id = await stage(c, who, { kind: 'ledger', scope, currency, ledgerId, csv: b.csv, demoRun: deal.demo_run }, [
         ...review.added.map((a) => ({
           kind: 'added' as const,
           line: byLine.get(a.line)!,
@@ -428,7 +450,7 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
     const out = await moneyTx(who, async (c) => {
       const row = (
         await c.query<ImportRow>(
-          `SELECT x.*, to_char(x.received_on, 'YYYY-MM-DD') AS received_on, g.kind AS import_kind, g.scope, g.currency, g.ledger_id
+          `SELECT x.*, to_char(x.received_on, 'YYYY-MM-DD') AS received_on, g.kind AS import_kind, g.scope, g.currency, g.ledger_id, g.demo_run
              FROM goten_import_row x JOIN goten_import g ON g.id = x.import_id
             WHERE x.import_id = $1 AND x.n = $2 AND g.created_at >= ${REAL_SINCE} FOR UPDATE OF x`,
           [id, n],
@@ -474,7 +496,9 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
     if (row.import_kind === 'statement' && row.participation_id) {
       // matched to someone's deal: whoever has a stake in it decides nothing about the line, not even to set it aside or skip it
       const dealId = (await c.query<{ deal_id: string }>('SELECT deal_id FROM participation WHERE id = $1', [row.participation_id])).rows[0]!.deal_id
-      await dealById(c, dealId, true)
+      const deal = (await dealById(c, dealId, true))!
+      // R-DEMO-05: checked again when a person decides (plan 05 §4.3), not only when the statement was read
+      if (!sameDemoSide(deal.demo_run, row.demo_run)) throw new Refused(DEMO_MONEY_APART)
       if (await hasStake(c, who, dealId)) throw new Refused(STAKE)
     }
     if (row.kind === 'unallocated' || (row.kind === 'match' && decision === 'unallocated')) return toUnallocated(c, who, row, decision)
@@ -543,8 +567,8 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
     }
     const id = randomUUID()
     await c.query(
-      `INSERT INTO unallocated_receipt (id, currency, amount_minor, received_on, payer_name, payer_account, bank_ref, note, owner, entered_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
+      `INSERT INTO unallocated_receipt (id, currency, amount_minor, received_on, payer_name, payer_account, bank_ref, note, owner, entered_by, demo_run)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10)`,
       [
         id,
         row.currency,
@@ -555,6 +579,8 @@ export function registerD4Import(app: FastifyInstance, d: D4ImportDeps) {
         (row.reference ?? '').slice(0, 500),
         row.proposal.reason === 'currency_column' ? 'The statement row names another currency.' : null,
         who.id,
+        // R-DEMO-05: the money keeps its statement's side
+        row.demo_run,
       ],
     )
     await takeLine(c, who, row, { origin: true, unallocated: id })

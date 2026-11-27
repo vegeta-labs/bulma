@@ -29,6 +29,8 @@ export interface D3Deal {
   fee_config_id: string | null
   bound_floor_minor: string | null
   went_live_at: Date | null
+  /** The demo run the deal belongs to, or null for an ordinary deal (R-DEMO-05). */
+  demo_run: string | null
   /** Live in the sandbox before the switch to real: it stops at the switch (D3 decision, see HANDOFF). */
   from_sandbox: boolean
 }
@@ -41,7 +43,7 @@ export async function dealById(c: Q, id: string, lock = false): Promise<D3Deal |
   return (
     (
       await c.query<D3Deal>(
-        `SELECT id, lead_user, syndicate_id, state, public_code, approved_version, pack_id, fee_config_id, bound_floor_minor, went_live_at,
+        `SELECT id, lead_user, syndicate_id, state, public_code, approved_version, pack_id, fee_config_id, bound_floor_minor, went_live_at, demo_run,
                 (went_live_at IS NOT NULL AND went_live_at < ${REAL_SINCE}) AS from_sandbox
            FROM deal WHERE id = $1 AND deleted_at IS NULL ${lock ? 'FOR UPDATE' : ''}`,
         [id],

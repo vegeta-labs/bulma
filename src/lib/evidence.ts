@@ -69,6 +69,9 @@ export const SECTIONS = [
 ] as const
 export type SectionKey = (typeof SECTIONS)[number]
 
+/** The size a section's title is drawn at, and nothing else in the pack is: what finds the sections in the PDF's text. */
+export const SECTION_TITLE_SIZE = 13
+
 export const SECTION_TITLE: Record<SectionKey, string> = {
   statements: 'Eligibility statements',
   warnings: 'Risk warnings and the choice made on each',
@@ -184,7 +187,7 @@ export function evidenceBlocks(m: Manifest): Block[] {
     ].join('\n'),
   })
   for (const s of m.sections) {
-    out.push({ text: s.title, bold: true, size: 13 })
+    out.push({ text: s.title, bold: true, size: SECTION_TITLE_SIZE })
     if (s.note) out.push({ text: s.note })
     if (s.items.length === 0) out.push({ text: 'Nothing recorded.' })
     for (const item of s.items) {

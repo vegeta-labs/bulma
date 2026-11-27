@@ -7,6 +7,7 @@ export const DEV_ONLY = [
   /^docs\/HANDOFF\.md$/,
   /^docs\/PROGRESS\.md$/,
   /^docs\/milestone\.txt$/,
+  /^docs\/demo-milestone\.txt$/,
   /^docs\/0[0-9]_[^/]*\.md$/,
   /^docs\/review\//,
   /^private\//,

@@ -9,6 +9,8 @@ import { tx, type Db, type Tx } from '../store/db.ts'
 import { reserveAttempt, sessionStillLive, type SessionUser } from './auth.ts'
 import type { MailQueue } from './outbox.ts'
 import { Refused } from './requests.ts'
+import { demoRunOfUser } from './demo.ts'
+import { DEMO_APART, sameDemoSide } from '../lib/demo.ts'
 
 type Q = Pick<Tx, 'query'>
 type Role = 'admin' | 'deal_member'
@@ -237,6 +239,8 @@ export function registerSyndicates(app: FastifyInstance, d: SyndicateDeps) {
         )
       ).rows[0]
       if (!inv || inv.status !== 'active') return null
+      const syndicateRun = (await c.query<{ demo_run: string | null }>('SELECT demo_run FROM syndicate WHERE id = $1', [inv.syndicate_id])).rows[0]!.demo_run
+      if (!sameDemoSide(syndicateRun, await demoRunOfUser(c, req.user!.id))) throw new Refused(DEMO_APART)
       // someone already in keeps the role they have: a link never changes it
       await c.query('INSERT INTO syndicate_member (syndicate_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (syndicate_id, user_id) DO NOTHING', [
         inv.syndicate_id,

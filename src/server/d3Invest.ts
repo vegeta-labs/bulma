@@ -75,6 +75,8 @@ import { withWarningCover } from './pdfCover.ts'
 import { toLead } from './d2Investee.ts'
 import type { MailQueue } from './outbox.ts'
 import { Refused } from './requests.ts'
+import { demoRunOfUser } from './demo.ts'
+import { DEMO_APART, sameDemoSide } from '../lib/demo.ts'
 
 export const INVITE_COOKIE = 'bulma_invite'
 /** §5.8: people on one deal. */
@@ -456,7 +458,13 @@ export function registerD3Invest(app: FastifyInstance, d: D3Deps) {
         // the deal full) keeps it, so the person need not find the link again (Codex round 3)
         const done = () => c.query('DELETE FROM pending_invite WHERE id = $1', [p.id])
         // the deal first, then the link: a link turned off while this waited is read as off
-        const dealId = (await c.query<{ deal_id: string }>('SELECT deal_id FROM invite_link WHERE id = $1', [p.invite_link])).rows[0]!.deal_id
+        const linkDeal = (await c.query<{ deal_id: string }>('SELECT deal_id FROM invite_link WHERE id = $1', [p.invite_link])).rows[0]
+        // a link no longer there for this person (a retired demo deal's, R-DEMO-06) can never be decided: it goes, unreported
+        if (!linkDeal) {
+          await done()
+          continue
+        }
+        const dealId = linkDeal.deal_id
         const deal = (await dealById(c, dealId, true))!
         const link = (await c.query<LinkRow>('SELECT * FROM invite_link WHERE id = $1', [p.invite_link])).rows[0]!
         const facts = await dealGateFacts(c, deal)
@@ -491,8 +499,10 @@ export function registerD3Invest(app: FastifyInstance, d: D3Deps) {
             ? { email: targeted.email, consumed: !!targeted.consumed_at, revoked: !!targeted.revoked_at, allowsReentry: targeted.allows_reentry }
             : null,
           verifiedEmail: who.email,
+          sameDemoSide: sameDemoSide(deal.demo_run, await demoRunOfUser(c, who.id)),
         })
         if (!r.ok) {
+          // across the demo line the invitation is spent: it can never be accepted by this account (R-DEMO-05)
           if (!['held', 'deal_not_open'].includes(r.reason) && !(r.reason === 'link_unusable' && !link.disabled_at)) await done()
           out.push({ deal_code: deal.public_code, result: r.reason })
           continue
@@ -922,6 +932,7 @@ export function registerD3Invest(app: FastifyInstance, d: D3Deps) {
     const result = await personTx(who, async (c) => {
       const deal = await dealById(c, id, true)
       if (!deal) throw new Refused(NOT_FOUND)
+      if (!sameDemoSide(deal.demo_run, await demoRunOfUser(c, who.id))) throw new Refused(DEMO_APART)
       const pack = (await packOf(c, deal))!
       const gate = await dealGateFacts(c, deal)
       const { person, inv } = await personFacts(c, who.id, deal, pack)
@@ -1813,39 +1824,7 @@ export function registerD3Invest(app: FastifyInstance, d: D3Deps) {
   app.get<{ Params: { id: string } }>('/api/my/participations/:id/instructions.pdf', verified, async (req, reply) => {
     const r = await tx(d.db, (c) => instructionFor(c, req.user!, Uuid.parse(req.params.id)))
     if (r.kind !== 'ok') throw new Refused('Payment details are not available now.')
-    const acct = Object.entries(r.account ?? {})
-      .filter(([k]) => !['asserted_client_money', 'fictional'].includes(k))
-      .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v ?? ''}`)
-      .join('\n')
-    const pdf = await renderPdf(
-      [
-        { text: [r.warning.text, r.warning.sender && `Sent by: ${r.warning.sender}`].filter(Boolean).join('\n'), bold: true, boxed: true },
-        ...(r.warning.risk_summary ? [{ text: r.warning.risk_summary }] : []),
-        { text: `Payment details for deal ${r.deal_code}`, bold: true, size: 14 },
-        { text: `${r.verify_note} ${r.verify_url}`, bold: true },
-        { text: `Still to pay: ${money(BigInt(r.still_to_pay_minor), r.currency)}`, bold: true, size: 16 },
-        {
-          text: `Amount to pay in total: ${money(BigInt(r.due_minor), r.currency)}\nReceived so far: ${money(BigInt(r.received_minor), r.currency)}\nPayment reference: ${r.reference}${r.pay_by ? `\nPay by: ${r.pay_by}` : ''}`,
-        },
-        {
-          text: [
-            'Your money',
-            r.your_money.text,
-            r.your_money.client_money === null ? '' : `The operator says this ${r.your_money.client_money ? 'is' : 'is not'} a client money account.`,
-            r.your_money.holder_frn ? `Holder's FRN: ${r.your_money.holder_frn}` : '',
-            r.your_money.refund_days === null ? '' : `If the deal does not close, the operator says money is returned within ${r.your_money.refund_days} days.`,
-            r.your_money.operator_statement,
-          ]
-            .filter(Boolean)
-            .join('\n'),
-        },
-        { text: `Receiving account\n${acct}` },
-        { text: r.breakdown.map((l) => `${l.label}: ${money(BigInt(l.minor), r.currency)}`).join('\n') },
-        { text: [r.no_money_held, ...r.reminders].join('\n') },
-        { text: `Issued ${new Date(r.issued_at).toISOString()}` },
-      ],
-      `Payment details ${r.deal_code}`,
-    )
+    const pdf = await instructionsPdf(r)
     reply.header('Content-Type', 'application/pdf').header('Content-Disposition', `attachment; filename="payment-${r.deal_code}.pdf"`)
     return reply.send(pdf)
   })
@@ -1985,3 +1964,64 @@ export function registerD3Invest(app: FastifyInstance, d: D3Deps) {
 
 /** As D1 names an entity: a person's full name, or the entity's name. */
 export const entityName = (type: string, fields: Record<string, string>) => (type === 'individual' ? fields.full_name : fields.name) ?? ''
+
+/** The fields of the payment details answer the PDF prints. */
+export interface InstructionsForPdf {
+  warning: { text: string; sender?: string | null; risk_summary?: string | null }
+  deal_code: string
+  currency: string
+  verify_note: string
+  verify_url: string
+  still_to_pay_minor: string
+  due_minor: string
+  received_minor: string
+  reference: string
+  // as the deal sheet stores it
+  pay_by: {} | null
+  your_money: { text: string; client_money: boolean | null; holder_frn: string | null; refund_days: number | null; operator_statement: string }
+  account: Record<string, unknown> | null
+  breakdown: ReadonlyArray<{ label: string; minor: string }>
+  no_money_held: string
+  reminders: readonly string[]
+  issued_at: Date | string
+}
+
+/**
+ * The payment details as a PDF (R-PAY-02), from the same fields the page shows. Exported so the static demo's export rebuilds it
+ * from its recorded answer, with the verification link's token already replaced (plan 05 §5.3).
+ */
+export function instructionsPdf(r: InstructionsForPdf): Promise<Buffer> {
+  const acct = Object.entries(r.account ?? {})
+    .filter(([k]) => !['asserted_client_money', 'fictional'].includes(k))
+    .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v ?? ''}`)
+    .join('\n')
+  return renderPdf(
+    [
+      { text: [r.warning.text, r.warning.sender && `Sent by: ${r.warning.sender}`].filter(Boolean).join('\n'), bold: true, boxed: true },
+      ...(r.warning.risk_summary ? [{ text: r.warning.risk_summary }] : []),
+      { text: `Payment details for deal ${r.deal_code}`, bold: true, size: 14 },
+      { text: `${r.verify_note} ${r.verify_url}`, bold: true },
+      { text: `Still to pay: ${money(BigInt(r.still_to_pay_minor), r.currency)}`, bold: true, size: 16 },
+      {
+        text: `Amount to pay in total: ${money(BigInt(r.due_minor), r.currency)}\nReceived so far: ${money(BigInt(r.received_minor), r.currency)}\nPayment reference: ${r.reference}${r.pay_by ? `\nPay by: ${r.pay_by}` : ''}`,
+      },
+      {
+        text: [
+          'Your money',
+          r.your_money.text,
+          r.your_money.client_money === null ? '' : `The operator says this ${r.your_money.client_money ? 'is' : 'is not'} a client money account.`,
+          r.your_money.holder_frn ? `Holder's FRN: ${r.your_money.holder_frn}` : '',
+          r.your_money.refund_days === null ? '' : `If the deal does not close, the operator says money is returned within ${r.your_money.refund_days} days.`,
+          r.your_money.operator_statement,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      },
+      { text: `Receiving account\n${acct}` },
+      { text: r.breakdown.map((l) => `${l.label}: ${money(BigInt(l.minor), r.currency)}`).join('\n') },
+      { text: [r.no_money_held, ...r.reminders].join('\n') },
+      { text: `Issued ${new Date(r.issued_at).toISOString()}` },
+    ],
+    `Payment details ${r.deal_code}`,
+  )
+}

@@ -6,7 +6,7 @@
 //   node src/main.ts audit verify | audit head | audit check-head <seq> <hash> | audit export (to standard output)
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { realAdaptersFromEnv } from './adapters/fromEnv.ts'
 import { LocalStorage } from './adapters/index.ts'
 import { runRetention } from './maintenance/retention.ts'
@@ -16,6 +16,8 @@ import { auditRecords, chainHead, checkHead, verifyAudit } from './store/audit.t
 import { Keyring } from './store/crypto.ts'
 import { pool } from './store/db.ts'
 import { migrate } from './store/migrate.ts'
+import { recoverDemoRun } from './server/demo.ts'
+import { demoOnStart } from './server/demoSeed.ts'
 import { ensureInstance } from './store/packs.ts'
 
 const secret = (name: string) => {
@@ -85,6 +87,9 @@ async function main(): Promise<void> {
       if (process.env.INSECURE_COOKIES !== '1' && !trustProxy) console.warn('TRUST_PROXY is not set. Behind a proxy every visitor shares one address, so ten failed sign-ins lock out everyone. Set it to the address of your proxy.')
       const mode = (await db.query<{ mode: string }>('SELECT mode FROM instance_profile WHERE id = 1')).rows[0]!.mode
       if (mode === 'real' && !process.env.PUBLIC_URL) throw new Error('PUBLIC_URL is required in the real mode: links in mail are built from it')
+      // R-DEMO-04: before any request, a demo run a crash left part-way is retired
+      const retired = await recoverDemoRun(db, k)
+      if (retired) console.log(`demo run ${retired} was interrupted and has been retired`)
       const app = await buildServer({
         db, k, logger: true,
         webRoot: process.env.WEB_ROOT ?? 'dist/web',
@@ -95,6 +100,9 @@ async function main(): Promise<void> {
         publicUrl: process.env.PUBLIC_URL,
         mailEveryMs: 30_000, // R23: due mail and retries
       })
+      // R-DEMO-03: the same seed as the instance page's button, in-process before the first request; one log line either way
+      const demo = await demoOnStart(app, db, k, { flag: process.env.BULMA_DEMO_DEAL, file: resolve(process.env.BULMA_DEMO_SIGN_INS_FILE ?? 'bulma-demo-sign-ins.txt') })
+      if (demo) console.log(demo)
       await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 8080) })
       return
     }

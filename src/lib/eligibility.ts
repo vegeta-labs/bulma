@@ -9,7 +9,9 @@ const yesNoText = z.discriminatedUnion('yes', [
   z.strictObject({ yes: z.literal(true), name: z.string().trim().min(1).max(200) }),
 ])
 
-const amount = z.string().regex(/^\d{1,15}$/)
+/** The longest amount a statement takes, in digits. */
+export const STATEMENT_DIGITS = 15
+const amount = z.string().regex(new RegExp(`^\\d{1,${STATEMENT_DIGITS}}$`))
 
 export const statementAnswers = z.strictObject({
   category: z.enum(['high_net_worth', 'sophisticated', 'neither']),

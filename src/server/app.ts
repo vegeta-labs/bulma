@@ -6,7 +6,7 @@ import { extname, isAbsolute, join, normalize, relative, resolve } from 'node:pa
 import cookie from '@fastify/cookie'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { z, ZodError } from 'zod'
-import { selectAdapters, type RealAdapters } from '../adapters/index.ts'
+import { selectAdapters, type RealAdapters, type Storage } from '../adapters/index.ts'
 import { feeConfigErrors } from '../lib/fees.ts'
 import { GATES, isGateName, type GateName } from '../lib/gate.ts'
 import { sandboxPaymentInstruction } from '../lib/instance.ts'
@@ -38,6 +38,8 @@ import { registerD4Work } from './d4Work.ts'
 import { registerD4Evidence } from './d4Evidence.ts'
 import { registerD4Complaints } from './d4Complaints.ts'
 import { registerD4Messages } from './d4Messages.ts'
+import type { DropFiles } from './demo.ts'
+import { demoState, registerDemo } from './demoSeed.ts'
 
 declare module 'fastify' {
   interface FastifyContextConfig {
@@ -131,7 +133,7 @@ export function parseTrustProxy(raw: string | undefined): string | false {
 
 export interface RouteRow { method: string; url: string; gate: GateName | undefined }
 
-export async function buildServer(d: ServerDeps): Promise<FastifyInstance & { routeTable: RouteRow[] }> {
+export async function buildServer(d: ServerDeps): Promise<FastifyInstance & { routeTable: RouteRow[]; dropSandboxFiles: DropFiles; sandboxStorage: Storage }> {
   // the logger never sees bodies, cookies or query strings
   const logger = d.logger ? { serializers: { req: (r: { method: string; url: string }) => ({ method: r.method, path: r.url.split('?')[0] }), res: (r: { statusCode: number }) => ({ statusCode: r.statusCode }) } } : false
   // a finite time to receive a whole request, so a slow or stalled client cannot hold a connection for ever
@@ -236,6 +238,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance & { ro
       ...i,
       active_pack: `${pack.key} version ${pack.version}`,
       blockers: i.mode === 'sandbox' ? await currentBlockers(d.db, i, d.paymentFile) : [],
+      demo: await demoState(d.db),
       switch_warning: SWITCH_WARNING,
       accountable_label: ACCOUNTABLE_LABEL,
       accountable_note: ACCOUNTABLE_NOTE,
@@ -267,11 +270,13 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance & { ro
 
   app.get('/api/packs', admin, async () => {
     const i = await instance()
-    const r = await d.db.query<{ id: string; key: string; version: number; regime: string; built_in: boolean; content: RegimePack }>('SELECT id, key, version, regime, built_in, content FROM regime_pack ORDER BY key, version')
+    const r = await d.db.query<{ id: string; key: string; version: number; regime: string; built_in: boolean; demo_only: boolean; content: RegimePack }>(
+      'SELECT id, key, version, regime, built_in, demo_only, content FROM regime_pack ORDER BY key, version',
+    )
     return {
       format_passed: PACK_FORMAT_PASSED,
       packs: r.rows.map((p) => ({
-        id: p.id, key: p.key, version: p.version, regime: p.regime, built_in: p.built_in, active: p.id === i.active_pack_id,
+        id: p.id, key: p.key, version: p.version, regime: p.regime, built_in: p.built_in, demo_only: p.demo_only, active: p.id === i.active_pack_id,
         placeholders: placeholderTexts(p.content), author_note: p.content.author_note,
         steps: p.content.steps.map((s) => s.kind), thresholds: p.content.thresholds,
       })),
@@ -324,8 +329,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance & { ro
     return { version }
   })
 
+  // R-DEMO-06: a retired demo account is kept as a row for the audit chain, and is no one's business on this page
   app.get('/api/users', admin, async () => {
-    const r = await d.db.query(`SELECT u.id, u.email, u.name, u.disabled_at, u.mfa_enabled_at IS NOT NULL AS mfa_on, coalesce((SELECT array_agg(g.role) FROM role_grant g WHERE g.user_id = u.id), '{}') AS roles FROM user_account u ORDER BY u.created_at`)
+    const r = await d.db.query(`SELECT u.id, u.email, u.name, u.disabled_at, u.mfa_enabled_at IS NOT NULL AS mfa_on, coalesce((SELECT array_agg(g.role) FROM role_grant g WHERE g.user_id = u.id), '{}') AS roles FROM user_account u WHERE NOT demo_retired_user(u.id) ORDER BY u.created_at`)
     return { users: r.rows }
   })
   app.post('/api/users', admin, async (req, reply) => {
@@ -353,7 +359,13 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance & { ro
   })
 
   // one set of sandbox fakes for the life of the server, so a file stored in the sandbox can be read back
-  const d1 = registerD1(app, { db: d.db, k: d.k, real: d.real, sandboxAdapters: selectAdapters('sandbox', d.db), now: d.now, publicUrl: d.publicUrl, uploadDeadlineMs: d.uploadDeadlineMs, downloadDeadlineMs: d.downloadDeadlineMs })
+  const sandboxAdapters = selectAdapters('sandbox', d.db)
+  // R-DEMO-06: a retired demo run's files go from this store at once; the expiry job empties the queue on disk
+  const dropFiles = async (keys: readonly string[]) => {
+    for (const key of keys) await sandboxAdapters.storage.delete(key)
+  }
+  x.dropFiles = dropFiles
+  const d1 = registerD1(app, { db: d.db, k: d.k, real: d.real, sandboxAdapters, now: d.now, publicUrl: d.publicUrl, uploadDeadlineMs: d.uploadDeadlineMs, downloadDeadlineMs: d.downloadDeadlineMs })
   x.mail = d1.mail
   if (d.mailEveryMs) {
     const stop = startWorker(d1.mailDeps, d.mailEveryMs, (code) => app.log.error(`mail worker failed: ${code}`))
@@ -372,6 +384,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance & { ro
   registerMailTemplates(app, { db: d.db, k: d.k })
   registerD4Work(app, { db: d.db, k: d.k, now: d.now })
   registerD4Evidence(app, { db: d.db, k: d.k, now: d.now })
+  registerDemo(app, { db: d.db, k: d.k })
   registerD4Complaints(app, { db: d.db, k: d.k, mail: d1.mail, now: d.now })
   // R-COM-04: from here an edited investor mail can be decided per person
   d1.mailDeps.promotion = d3.promotion
@@ -413,5 +426,6 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance & { ro
     app.log.error({ ref, code: (err as { code?: string }).code }, 'request failed')
     return reply.code(500).send({ error: 'request failed', ref })
   })
-  return Object.assign(app as unknown as FastifyInstance, { routeTable })
+  // dropSandboxFiles: the demo seed's own retirement after a failure uses it too
+  return Object.assign(app as unknown as FastifyInstance, { routeTable, dropSandboxFiles: dropFiles, sandboxStorage: sandboxAdapters.storage })
 }

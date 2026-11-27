@@ -12,6 +12,10 @@
 // - Deals.tsx `autosave=1` on the client: a page holding a submitted deal also holds an older version number, so the server refuses it either way; the server's own check has its mutants.
 // - d2.ts and d2Investee.ts, reading a page inside REPEATABLE READ: the difference shows only if something commits between two reads, which a test cannot place.
 // - estimate.ts leastInvestment, the surcharge threshold as a point to check: below the threshold fee ÷ base is flat (rate) or falling (minimum, maximum), so its value there is never above the lower end; kept because the PRD names it.
+// - demo.ts beginDemoRun, refusing when the run lock is taken: the instance row lock and the live-run check refuse the same
+//   second run; the lock is there so a starting process can tell a run in hand from one a crash left (its own mutant).
+// - demo.ts retireDemoAccount, `DELETE FROM app_session`: the account is disabled and its credential version goes up in the same
+//   statement, either of which already ends every session; the deletion only tidies rows (as d1.ts email confirm above).
 // - d3Core.ts linkAssignable, refusing an open token while open links are off: every change of the settings (a saved policy,
 //   a pack activation) turns open tokens off in the same transaction, so no open link is on while the switch is off; kept as defence in depth.
 // - d3Ops.ts deed-sent, hashing the kept document or using the sheet's hash: since round 5 the kept document is exactly the
@@ -21,6 +25,9 @@
 //   font has is drawn as "?" with a width, so it never runs past the margin either way; only where a line may break changes.
 // - d4Life.ts applyCancel, the relationship refreshed for each cancelled part: the invitation of a part ended by cancellation stays
 //   active (§5.2), so the loop over active invitations after it refreshes the same people, now on a cancelled deal.
+// - static-demo.ts, a chosen file: stopping the change event and emptying the input each keep the file from the screen on
+//   their own (the document's capture listener runs before React's on the root, and an emptied input holds no file); the
+//   mutant removing both is listed.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { execSync, spawn } from 'node:child_process'
 import { mutantsOf, newMutants, picks, touchedTests } from './mutation-select.mjs'
@@ -67,6 +74,25 @@ const D4LIFEWEB = 'npx playwright test e2e/d4.spec.ts -g "TC-WDR-02" --reporter=
 const D4CHANGEWEB = 'npx playwright test e2e/d4.spec.ts -g "E2E-05" --reporter=dot'
 const D4ALOWEB = 'npx playwright test e2e/d4.spec.ts -g "TC-ALO-01 /" --reporter=dot'
 const D4WORDINGWEB = 'npx playwright test e2e/d4.spec.ts -g "TC-NTF-01 / TC-NTF-03" --reporter=dot'
+const DEMO = 'npx vitest run src/server/demo.test.ts src/lib/lib.test.ts --reporter=dot'
+const DEMO3 = 'npx vitest run src/server/demo.test.ts -t TC-DEMO-03 --reporter=dot'
+const DEMO5 = 'npx vitest run src/server/d3.test.ts src/lib/lib.test.ts -t TC-DEMO-05 --reporter=dot'
+const DEMO6 = 'npx vitest run src/server/demoRetire.test.ts --reporter=dot'
+const DEMO9 = 'npx vitest run src/server/demo.test.ts -t TC-DEMO-09 --reporter=dot'
+const DEMOP = 'npx vitest run scripts/demo-export/record.test.ts --reporter=dot'
+const DEMOP4 = 'npx vitest run src/demo/snapshot.test.ts --reporter=dot'
+const DEMOP6 = 'npx vitest run scripts/demo-export/pack.test.ts --reporter=dot'
+const DEMOPF = 'npx vitest run scripts/demo-export/files.test.ts --reporter=dot'
+const DEMOP7 = 'npx vitest run src/demo/snapshot.test.ts scripts/demo-export/serve.test.ts --reporter=dot'
+// the static demo's browser tests on a pack built from the mutated code: built again, served from dist-demo (e2e-demo/serve.ts)
+const DEMOWEB9 = 'node --experimental-strip-types --no-warnings scripts/demo-build.ts > /dev/null && DEMO_E2E_DIR=dist-demo npx playwright test -c playwright.demo.config.ts e2e-demo/pack.spec.ts -g "every page of every view" --reporter=dot'
+const DEMOWEB10 = 'node --experimental-strip-types --no-warnings scripts/demo-build.ts > /dev/null && DEMO_E2E_DIR=dist-demo npx playwright test -c playwright.demo.config.ts e2e-demo/pack.spec.ts -g "every button on every page" --reporter=dot'
+const DEMOWEB10Q = 'node --experimental-strip-types --no-warnings scripts/demo-build.ts > /dev/null && DEMO_E2E_DIR=dist-demo npx playwright test -c playwright.demo.config.ts e2e-demo/pack.spec.ts -g "a quote for a recorded amount" --reporter=dot'
+const DEMOWEB11 = 'node --experimental-strip-types --no-warnings scripts/demo-build.ts > /dev/null && DEMO_E2E_DIR=dist-demo npx playwright test -c playwright.demo.config.ts e2e-demo/pack.spec.ts -g "TC-DEMO-11 links" --reporter=dot'
+// the export itself changed: recorded again (Docker, about a minute) before the build
+const DEMOEXPORT11 = 'node --experimental-strip-types --no-warnings scripts/demo-snapshot.ts > /dev/null && node --experimental-strip-types --no-warnings scripts/demo-build.ts > /dev/null && DEMO_E2E_DIR=dist-demo npx playwright test -c playwright.demo.config.ts e2e-demo/pack.spec.ts -g "TC-DEMO-11 links" --reporter=dot'
+const SIGNOUTWEB = 'E2E_PORT=4341 npx playwright test e2e/d1.spec.ts -g "TC-AUTHZ-02 the whole path" --reporter=dot'
+const DEMO7 = 'npx vitest run src/server/demo.test.ts src/lib/lib.test.ts -t TC-DEMO-07 --reporter=dot'
 const AUTHZMATRIX = 'npx vitest run src/server/d3.test.ts -t "the access matrix" --reporter=dot'
 const RENEWAL = 'npx vitest run src/server/d3.test.ts -t "after twelve months" --reporter=dot'
 const RENEWALROW = 'npx vitest run src/server/d3.test.ts -t "renewed as none of these" --reporter=dot'
@@ -234,7 +260,7 @@ const MUTANTS = [
   ['src/lib/regimePack.ts', 'p.assessment.questions.length < MIN_QUESTIONS', 'false', 'a small question bank loads', RULES],
   ['src/lib/regimePack.ts', 'income_rounding_minor: positiveAmount', 'income_rounding_minor: amount', 'zero rounding loads', RULES],
   ['src/lib/gate.ts', '!a.mustChangePassword && a.emailVerified && a.mfaOn && a.roles.includes(role)', '!a.mustChangePassword && a.mfaOn && a.roles.includes(role)', 'an unproved address uses a role', D1],
-  ['src/server/auth.ts', 'WHERE u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL GROUP BY', 'WHERE u.disabled_at IS NULL GROUP BY', 'staff counted with an unproved address', D1],
+  ['src/server/auth.ts', 'WHERE u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL AND u.demo_run IS NULL GROUP BY', 'WHERE u.disabled_at IS NULL AND u.demo_run IS NULL GROUP BY', 'staff counted with an unproved address', D1],
   ['src/server/d1.ts', 'coolingOff: co && coolingOffCounts(', 'coolingOff: co && (true || coolingOffCounts)(', 'a short wait counts under cobs', D1],
   ['src/server/d1.ts', "name = $4, identity_changed_at = clock_timestamp() WHERE id = $1'", "name = $4 WHERE id = $1'", 'a new name needs no new signature', D1],
   ['src/server/d1.ts', "await c.query('UPDATE legal_entity SET rejected_at = $2::timestamptz WHERE id = $1', [k.entity_id, now().toISOString()])\n", '', 'a refusal does not bind the entity', D1],
@@ -449,7 +475,7 @@ const MUTANTS = [
   ['src/server/auth.ts', "s.expires_at > now() AND u.disabled_at IS NULL AND u.credential_version = s.credential_version", "s.expires_at > now() AND u.disabled_at IS NULL", 'old sessions survive a password change', SRV],
   ['src/server/auth.ts', "s.expires_at > statement_timestamp() AND u.disabled_at IS NULL AND u.credential_version = s.credential_version", "s.expires_at > statement_timestamp() AND u.disabled_at IS NULL", 'a queued change ignores a changed credential', SRV],
   ['src/server/auth.ts', "s.expires_at > now() AND u.disabled_at IS NULL AND", "s.expires_at > now() AND", 'disabled account keeps its session', SRV],
-  ['src/server/auth.ts', ' WHERE u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL GROUP BY', ' WHERE u.email_verified_at IS NOT NULL GROUP BY', 'disabled accounts count as staff', SRV],
+  ['src/server/auth.ts', ' WHERE u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL AND u.demo_run IS NULL GROUP BY', ' WHERE u.email_verified_at IS NOT NULL AND u.demo_run IS NULL GROUP BY', 'disabled accounts count as staff', SRV],
   ['src/adapters/index.ts', "if (mode === 'sandbox') return {", "if (mode === 'never') return {", 'sandbox uses real adapters', SRV],
   ['src/adapters/index.ts', "if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw", 'if (false) throw', 'storage escapes its folder', SRV],
   ['src/store/audit.ts', "detail_hmac: detailJson === null ? null : k.hmac(`audit-detail\\0${detailJson}`)", "detail_hmac: detailJson", 'personal detail in the audit row', SRV],
@@ -1607,6 +1633,287 @@ const MUTANTS = [
   ['src/lib/dealSheet.ts', '  } catch {\n    return v\n  }', '  } catch {\n    return null\n  }', 'D4: a stored difference that is not a fee record disappears', D4ST],
   ['src/server/d4Change.ts', "          changes: changesInWords(r.classification.changes, deal.draft.terms?.currency ?? ''),", '          changes: r.classification.changes,', "D4: the lead reads one person's fee change as JSON", D4CH],
   ['src/server/d4Change.ts', "        differences: changesInWords(cr.classification.changes, deal.draft.terms?.currency ?? ''),", '        differences: cr.classification.changes,', "D4: the reviewer reads one person's fee change as JSON", D4CH],
+  ['src/lib/instance.ts', "if (f.demoAdding) out.push(", "if (false) out.push(", 'DEMO: a demo run being added does not block the switch', DEMO],
+  ['src/server/requests.ts', "'SELECT demo_adding IS NOT NULL AS on FROM instance_profile WHERE id = 1'", "'SELECT false AS on'", 'DEMO: the switch does not look at the demo run', DEMO],
+  ['src/server/demo.ts', "if (row.mode !== 'sandbox') throw new Refused('A demo deal can be added in the sandbox only.')", "if (false) throw new Refused('')", 'DEMO: a run starts in the real mode', DEMO],
+  ['src/server/demo.ts', "if (live) throw new Refused(", "if (false) throw new Refused(", 'DEMO: a second demo deal is added', DEMO],
+  ['src/server/demo.ts', "if (row.mode !== 'sandbox' || row.demo_adding !== runId) throw", "if (row.mode !== 'sandbox') throw", 'DEMO: a step of a run no longer being added goes on', DEMO],
+  ['src/server/demo.ts', "else keys = await retireRun(c, k, run.id, outcome.failure.slice(0, 500))", "else await c.query('SELECT 1')", 'DEMO: a failed run is not retired', DEMO],
+  ['src/server/demo.ts', "    if (!got) return null\n", "", 'DEMO: start-up retires a run another process still adds', DEMO],
+  ['src/server/demo.ts', "      const keys = await retireRun(c, k, left, 'interrupted')", "      const keys: string[] = []", 'DEMO: an interrupted run is not retired', DEMO],
+  ['src/server/auth.ts', ' AND u.demo_run IS NULL GROUP BY g.user_id', ' GROUP BY g.user_id', 'DEMO: a demo account counts as staff', DEMO],
+  ['src/server/requests.ts', '    if (grant && target.demo) throw new Refused(DEMO_NO_ROLE)', '', 'DEMO: a demo account takes a role in the sandbox', DEMO],
+  ['src/server/demo.ts', '  for (const { id } of ids) await retireDemoAccount(c, k, id)', '', "DEMO: a failed run's accounts stay usable", DEMO],
+  ['src/server/demo.ts', '        if (reviewer) await retireDemoAccount(c, k, reviewer)', '', "DEMO: the run's reviewer outlives the run", DEMO],
+  ['src/server/demo.ts', '  await voidTokens(c, userId)\n  await c.query(\'DELETE FROM role_grant', '  await c.query(\'DELETE FROM role_grant', "DEMO: a retired account's reset link still works", DEMO],
+  ['src/server/demo.ts', 'disabled_at = coalesce(disabled_at, now()), password_hash = NULL, ', 'password_hash = NULL, ', 'DEMO: a retired account stays enabled', DEMO],
+  ['src/server/demo.ts', "await c.query('DELETE FROM role_grant WHERE user_id = $1', [userId])", "await c.query('SELECT $1::uuid', [userId])", "DEMO: a retired reviewer keeps the role", DEMO],
+  ['src/server/demo.ts', 'password, by, demoRun: runId })', 'password, by })', 'DEMO: a demo account is not marked with its run', DEMO],
+  ['src/server/demo.ts', "    await grantRole(c, k, reviewer.id, 'reviewer', by)\n", '', 'DEMO: the run has no reviewer', DEMO],
+  ['src/store/migrations/006_demo.sql', "  IF NEW.role <> 'reviewer' AND EXISTS", '  IF false AND EXISTS', 'DEMO: the database lets a demo account be admin', DEMO],
+  ['src/server/demoSeed.ts', "  if (mode !== 'sandbox') return ['A demo deal can only be added in the sandbox.']\n", '', 'DEMO3b: the route in the real mode refuses only later, in other words', DEMO3],
+  ['src/server/demoSeed.ts', '  if (!policy.perLinkTerms) out.push(', '  if (false) out.push(', 'DEMO3: the seed starts under settings with no per-link terms', DEMO3],
+  ['src/server/demoSeed.ts', '  if (!policy.genericLinks) out.push(', '  if (false) out.push(', 'DEMO3: the seed starts under settings with no open links', DEMO3],
+  ['src/server/demoSeed.ts', "    if ((await c.query('SELECT 1 FROM fee_config LIMIT 1')).rowCount) return false\n", "    return false\n", 'DEMO3: no sample platform fee on an instance that never set one', DEMO3],
+  ['src/server/demoSeed.ts', "      fee_payer: 'lead',", "      fee_payer: 'investors',", 'DEMO3: the investors pay the platform fee, so the amounts move with it', DEMO3],
+  ['src/server/demoSeed.ts', "    if (x.plan.stage === 'kyc_in_review') return\n", '', 'DEMO3: every KYC check passed, none left for the reviewer', DEMO3],
+  ['src/server/demoSeed.ts', "    if (x.plan.stage === 'funded')\n", "    if (false)\n", 'DEMO3: no money recorded for the funded investor', DEMO3],
+  ['src/server/demoSeed.ts', "    if (x.plan.stage === 'to_sign') return\n", '', 'DEMO3: the investor to sign signs too', DEMO3],
+  ['src/server/demoSeed.ts', '      .sort((i, j) => s.investors[j]!.daysAtStep - s.investors[i]!.daysAtStep)\n', '', 'DEMO9: the investors walked in the list order, not longest in their step first', DEMO9],
+  ['src/server/demoSeed.ts', '    if (r.statusCode !== 200) await this.signIn(', '    if (false) await this.signIn(', 'DEMO9: an ended session is not signed in again', DEMO9],
+  ['src/server/demoSeed.ts', '    await o.beforeInvestor?.(x.plan)\n', '', "DEMO9: the export's clock is not moved before an investor", DEMO9],
+  ['src/demo/snapshot.ts', '      .sort()\n      .map((k) => `${JSON.stringify(k)}', '      .map((k) => `${JSON.stringify(k)}', 'DEMOP: a quote body in another key order is another entry', DEMOP],
+  ['scripts/demo-export/record.ts', '.sort((a, b) => b.length - a.length)', '.sort((a, b) => a.length - b.length)', 'DEMOP: a secret inside a longer one replaced first, leaving the rest', DEMOP],
+  ['scripts/demo-export/record.ts', "Object.entries(v).map(([k, x]) => [swap(k), walk(x)])", "Object.entries(v).map(([k, x]) => [k, walk(x)])", 'DEMOP: secrets left in the keys (the invitation request)', DEMOP],
+  ['scripts/demo-export/record.ts', '/g)) found.add(decodedOrAsIs(m[1]!))', '/g)) found.add(m[1]!)', 'DEMOP: an encoded link token not found as the server knows it', DEMOP],
+  ['scripts/demo-export/record.ts', '        if (!UUID.test(k) && !allowed.has(k)) out.add(k)', '        if (!allowed.has(k)) out.add(k)', 'DEMOP: ids as keys stop the export', DEMOP],
+  ['scripts/demo-export/record.ts', '        walk(x)\n      }', '      }', 'DEMOP: fields inside fields not checked', DEMOP],
+  ["src/demo/snapshot.ts", "  if (method === 'POST') return Object.hasOwn(snap.post, postKey(view, at, body)) ? snap.post[postKey(view, at, body)] : undefined\n  return undefined", "  if (method === 'POST') return Object.hasOwn(snap.post, postKey(view, at, body)) ? snap.post[postKey(view, at, body)] : undefined\n  return snap.post[postKey(view, at, body)]", "DEMOP4: a PUT or DELETE with a recorded body is answered", DEMOP4],
+  ["src/demo/snapshot.ts", "  const at = `${u.pathname}${u.search}`", "  const at = u.pathname", "DEMOP4: a filter answered with the unfiltered list", DEMOP4],
+  ["src/demo/snapshot.ts", "    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))\n", "", "DEMOP4: the quote amounts named in the recorded order", DEMOP4],
+  ["src/demo/snapshot.ts", "  const m = /^#\\/(investor|lead|reviewer)(\\/[^?#]*)?(\\?[^#]*)?$/.exec(hash)", "  const m = /^#\\/(\\w+)(\\/[^?#]*)?(\\?[^#]*)?$/.exec(hash)", "DEMOP4: an address naming no view is read as one", DEMOP4],
+  ["src/demo/snapshot.ts", "  return { view: m[1] as View, path: m[2] || '/', search: m[3] ?? '' }", "  return { view: m[1] as View, path: m[2] || '/', search: '' }", "DEMOP4: the query of a deep link lost", DEMOP4],
+  ["src/demo/snapshot.ts", "  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${hh}:${mm} UTC`", "  return d.toLocaleString()", "DEMOP4: the banner time depends on the visitor", DEMOP4],
+  ["scripts/demo-build.ts", "    '    Object.values(o).forEach(freeze)',\n", "", "DEMOP4: only the top of the snapshot frozen", DEMOP4],
+  ["src/demo/snapshot.ts", "    const download = name ?? a.file.name", "    const download = a.file.name ?? name", "DEMOP5: the screen's file name loses to the server's", DEMOP4],
+  ["src/demo/snapshot.ts", "  const why = a && a.status >= 400 ? refusalText(a) : null", "  const why = null", "DEMOP5: a refused link says only not in the demo", DEMOP4],
+  ["src/demo/snapshot.ts", "    return [...new Set([DEMO_NOT_RECORDED, ...refusals.sort()])]", "    return [...new Set([...refusals.sort(), DEMO_NOT_RECORDED])]", "DEMOP5: note pages numbered in another order", DEMOP4],
+  ["src/demo/snapshot.ts", "      .filter(([key, a]) => key.startsWith(`${view} GET `) && a.status >= 400)", "      .filter(([key, a]) => key.includes(' GET ') && a.status >= 400)", "DEMOP5: a view gets another view's refusals", DEMOP4],
+  ["scripts/demo-build.ts", "    `<p role=\"status\">${escape(sentence)}</p>`,", "    `<p role=\"status\">${sentence}</p>`,", "DEMOP5: a note page's sentence not escaped", DEMOP4],
+  ["scripts/demo-build.ts", "  for (const p of paths) if (!/^files\\/[0-9a-f]{32}\\/[A-Za-z0-9._-]+$/.test(p))", "  for (const p of paths) if (!/^files\\//.test(p))", "DEMOP5: a file path outside files/<hash>/<name> copied", DEMOP4],
+  ["scripts/demo-export/record.ts", "base.toLowerCase().endsWith(ext) ? base : `${base}${ext}`", "`${base}${ext}`", "DEMOP5: a file name gets its extension twice", DEMOP],
+  ["scripts/demo-export/record.ts", "  const base = (name ?? 'file').replace(/[^A-Za-z0-9._-]+/g, '-')", "  const base = (name ?? 'file').replace(/[/]+/g, '-')", "DEMOP5: a file name keeps spaces and other letters", DEMOP],
+  ["scripts/demo-export/record.ts", "  return [...secrets].filter((s) => text.includes(s) || decoded.includes(s))", "  return [...secrets].filter((s) => text.startsWith(s) || decoded.startsWith(s))", "DEMOP5: a secret inside a file's text missed", DEMOP],
+  ['scripts/demo-export/pack.ts', "if (!m[1]!.startsWith('demo-')) say(`a link token", "if (!m[1]!.startsWith('')) say(`a link token", 'DEMOP6: a real link token passes the scan', DEMOP6],
+  ['scripts/demo-export/pack.ts', "if (m[2] && !m[2].startsWith('demo-')) say(", "if (m[2] && !m[2].startsWith('')) say(", 'DEMOP6: a real CSRF or session value passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', '(?:csrf|token|session|password|secret|cookie|api_key)[\\w-]*)"', '(?:csrf|session|password|secret|cookie|api_key)[\\w-]*)"', 'DEMOP6: a token field passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', "if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text)) say('key material')", '', 'DEMOP6: key material passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', 'if (!fictionalHost(h) && !(library && h in LIBRARY_HOSTS))', 'if (!fictionalHost(h) && !(h in LIBRARY_HOSTS))', 'DEMOP6: library hosts allowed in the data too', DEMOP6],
+  ['scripts/demo-export/pack.ts', '/(^|\\.)(invalid|example|test|localhost)$/.test(host)', '/(invalid|example|test|localhost)$/.test(host)', 'DEMOP6: notexample.com counts as fictional', DEMOP6],
+  ['scripts/demo-export/pack.ts', '  for (const re of code ? HOSTS.slice(0, 2) : HOSTS)', '  for (const re of HOSTS.slice(0, 2))', 'DEMOP6: bare domains in data and PDFs pass', DEMOP6],
+  ['scripts/demo-export/pack.ts', 'if (!rules.companies.has(c)) say(', 'if (false) say(', 'DEMOP6: a company outside the scenario passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', '    if (rules.names.test(t)) say(', '    if (false) say(', 'DEMOP6: a name on the private list passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', '    if (!/<meta name="robots" content="noindex"/.test(text)) say(\'no noindex\')\n', '', 'DEMOP6: a page without noindex passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', "    if (/<script(?![^>]*\\ssrc=)[^>]*>/i.test(text)) say('an inline script')\n", '', 'DEMOP6: an inline script passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', 'if (/<style\\b|\\sstyle=/i.test(text))', 'if (/<style\\b/i.test(text))', 'DEMOP6: a style attribute passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', "  if (sorted.join('\\n') !== [...sorted].sort().join('\\n')) out.push(", '  if (false) out.push(', 'DEMOP6: an unsorted manifest passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', '  for (const p of listed.keys()) if (!files.has(p)) out.push(', '  for (const p of listed.keys()) if (false) out.push(', 'DEMOP6: a listed file missing from the archive passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', "  const paths = [...files.keys()].filter((p) => p !== 'MANIFEST.sha256').sort()", '  const paths = [...files.keys()].sort()', 'DEMOP6: the manifest lists itself', DEMOP6],
+  ['scripts/demo-export/pack.ts', '    if (o instanceof PDFString || o instanceof PDFHexString) parts.push(o.decodeText())', '    if (o instanceof PDFString) parts.push(o.decodeText())', 'DEMOP6: a hex-written PDF link is not read', DEMOP6],
+  ['scripts/demo-export/pack.ts', "    if (type === '/Font' && !['/CIDFontType0', '/CIDFontType2'].includes(sub ?? '') && !dict.has(PDFName.of('ToUnicode')))", '    if (false)', 'DEMOP6: a PDF whose text cannot be read passes', DEMOP6],
+  ['src/server/pdfCover.ts', '  const out = await PDFDocument.create({ updateMetadata: false })', '  const out = await PDFDocument.create()', 'DEMOP6: the covered PDF names pdf-lib and its link', 'npx vitest run src/server/pdfCover.test.ts --reporter=dot'],
+  // P step 7: the pack in the browser under the site's headers (TC-DEMO-09/10/11)
+  ['src/demo/snapshot.ts', '  return `${PACK_HOME}${addressFor(view, page)}`', '  return addressFor(view, page)', "DEMOP7: the PDF prints the pack's hash without its place on the site", DEMOP7],
+  ['src/demo/snapshot.ts', "  if (!page.startsWith('/') || page.startsWith('//')) throw", "  if (!page.startsWith('/')) throw", 'DEMOP7: a link to another host is printed as a page of the pack', DEMOP7],
+  ['scripts/demo-snapshot.ts', 'verify_url: printedAddress(m[1] as View, body.verify_url)', 'verify_url: body.verify_url', "DEMOP7: the PDF prints the server's check address, which the site does not have", DEMOEXPORT11],
+  ['e2e-demo/serve.ts', '  if (codeDiffers(info.commit, cwd)) refuse(', '  if (false) refuse(', 'DEMOP7: a pack built from other code is tested as this code', DEMOP7],
+  ['e2e-demo/serve.ts', "digest('hex') !== want)", "digest('hex') === 'x')", 'DEMOP7: a pack changed after its scan is served', DEMOP7],
+  ['src/web/zodConfig.ts', 'config({ jitless: true })', 'config({ jitless: false })', 'DEMOP7: every page load reports a CSP violation', DEMOWEB9],
+  ['src/web/App.tsx', "    api('/api/logout', 'POST').then(\n      () => setUser(null),\n", "    void api('/api/logout', 'POST').then(() => setUser(null)), void Promise.resolve().then(\n      () => undefined,\n", 'DEMOP7: a sign-out that fails says nothing', SIGNOUTWEB],
+  ['src/web/App.tsx', "    api('/api/logout', 'POST').then(\n      () => setUser(null),\n", "    void api('/api/logout', 'POST').then(() => setUser(null)), void Promise.resolve().then(\n      () => undefined,\n", 'DEMOP7: the demo sign-out leaves an error in the console', DEMOWEB10],
+  ['src/web/App.tsx', '      <Problem error={outError} />\n', '', 'DEMOP7: why a sign-out failed is not shown', SIGNOUTWEB],
+  // reviewer findings 2026-11-26 (docs/review/2026-11-26_demo_pack_fresh_review_triage.md)
+  ['src/web/App.tsx', '        signedOut(e)\n          ? setUser(null)', '        false\n          ? setUser(null)', 'DEMOPR: a sign-out after the session ended has no way out', SIGNOUTWEB],
+  ['src/demo/snapshot.ts', '    .filter((b) => fields(b) === fields(body))\n', '', 'DEMOPR: a change of amount is told the quote amounts', DEMOP7],
+  ['scripts/demo-export/record.ts', 'found.add(decodedOrAsIs(decodedOrAsIs(m[1]!)))', 'void m', "DEMOPR: a token inside another link's query is not replaced", DEMOP],
+  ['scripts/demo-export/record.ts', '  return [...new Set(head.filter((c) => !allowed.has(c)))].sort()', '  return []', "DEMOPR: a CSV's column names pass unlooked at", DEMOP],
+  ['scripts/demo-export/record.ts', "  want('received', panel.metrics.received_minor, '1530000')\n", '', 'DEMOPR: a wrong amount received is exported', DEMOP],
+  ['scripts/demo-export/record.ts', '    want(`${x.name} days`, r?.days, x.daysAtStep)\n', '', 'DEMOPR: wrong days at a step are exported', DEMOP],
+  ['scripts/demo-export/record.ts', "  want('payment details check', check?.valid, true)\n", '', 'DEMOPR: a payment check that fails is exported', DEMOP],
+  ['scripts/demo-export/pack.ts', '|LTD|Limited|LIMITED|plc|Plc|PLC|Inc|INC|LLC|LLP|LP|GmbH|GMBH|AG|SA|BV|Corp|CORP|Corporation|CORPORATION)', '|Limited|plc|PLC|Inc|LLC|LLP|LP|GmbH|AG|SA|BV|Corp|Corporation)', "DEMOPR: a company in the registry's capitals passes", DEMOP6],
+  ['scripts/demo-export/pack.ts', '  for (const t of new Set([text, percentDecoded(text)])) {\n    // a token is long', '  for (const t of new Set([text])) {\n    // a token is long', "DEMOPR: a token inside another link's query passes the scan", DEMOP6],
+  ['scripts/demo-export/pack.ts', '"([\\w-]*(?:csrf|', '"((?:csrf|', 'DEMOPR: a key that only contains a secret word passes', DEMOP6],
+  ['scripts/demo-pack.ts', '    if (problems.length) throw new Error', '    if (false) throw new Error', 'DEMOPR: a refused archive gets its .sha256', DEMOP6],
+  ['scripts/demo-pack.ts', '  } finally {\n    rmSync(tmp, { recursive: true, force: true })\n', '  } finally {\n', 'DEMOPR: a refused archive is left behind', DEMOP6],
+  ['scripts/demo-pack.ts', "    if (!lstatSync(f).isFile()) problems.push(`${p}: not a plain file`)\n    else ", '    ', 'DEMOPR: a link in the build is followed into the archive', DEMOP6],
+  // not a mutant: the same check on the unpacked files survives, equivalent today: the archive is written by tar.ts, which
+  // writes only files and folders (tarProblems refuses any other type); kept as the guard
+  ['scripts/demo-pack.ts', "!TEXT.test(p) && !p.endsWith('.pdf') && p !== 'MANIFEST.sha256'", "p.endsWith('.none')", 'DEMOPR: a kind of file the scan cannot read passes', DEMOP6],
+  ['scripts/demo-export/source.ts', '  if (s.clean !== true) return', '  if (false) return', 'DEMOPR: output of changed code is packed', DEMOP6],
+  ['scripts/demo-export/source.ts', '  if (s.commit !== commit) return', '  if (false) return', 'DEMOPR: output of another commit is packed', DEMOP6],
+  ['scripts/demo-export/source.ts', "  return { commit, clean: !staged && !codeDiffers(commit, cwd) }", '  return { commit, clean: true }', 'DEMOPR: changed code is noted as clean', DEMOP6],
+  // not a mutant: the crawl's `route.abort()` of other changes as `route.continue()` survives, equivalent today: the screens it
+  // opens send no change but the two allowed (the export prints any it stopped, and has printed none); kept as the guard
+  ['src/web/static-demo.ts', '      if (!fileInput(e.target)) return\n      e.preventDefault()\n', '      if (!fileInput(e.target)) return\n', 'DEMOP7: a file chooser opens in the pack', DEMOWEB10Q],
+  ['src/web/static-demo.ts', "        e.stopImmediatePropagation()\n        ;(e.target as HTMLInputElement).value = ''", '', 'DEMOP7: a chosen file reaches the screen, which reads it', DEMOWEB10Q],
+  // Codex P round 1 (docs/review/2026-11-26_demo_pack_codex_r1_triage.md)
+  ['scripts/demo-export/tar.ts', '  field(h, 108, 8, octal(0, 8))', '  field(h, 108, 8, octal(501, 8))', "DEMOPC1: the archive names the builder's uid", DEMOP6],
+  ['scripts/demo-export/tar.ts', '    if (e.uname || e.gname) say(', '    if (false) say(', 'DEMOPC1: an archive naming its user passes', DEMOP6],
+  ['scripts/demo-export/tar.ts', "    if (e.type !== '0' && e.type !== '5') say(", '    if (false) say(', 'DEMOPC1: an extended header passes', DEMOP6],
+  ['scripts/demo-export/tar.ts', '    if (e.uid !== 0 || e.gid !== 0) say(', '    if (false) say(', 'DEMOPC1: an archive naming its owner passes', DEMOP6],
+  // not a mutant: packDir's `problems.push(...tarProblems(entries, now))` removed survives, equivalent today: tar.ts writes no
+  // header it would refuse; kept as the guard against a change to the writer
+  ['scripts/demo-export/pack.ts', '    for (const m of t.matchAll(LOCAL_PATH)) say(', '    for (const m of t.matchAll(/(?!)/g)) say(', "DEMOPC1: a path on the builder's machine passes", DEMOP6],
+  ['scripts/demo-export/pack.ts', '  for (const t of new Set([text, percentDecoded(text)])) {\n    for (const h of hostsIn', '  for (const t of new Set([text])) {\n    for (const h of hostsIn', 'DEMOPC1: a %xx-encoded host passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', '    else if (listed.has(m[2]!)) out.push(', '    else if (false) out.push(', 'DEMOPC1: a manifest listing a file twice is read by its last line', DEMOP6],
+  ['scripts/demo-export/pack.ts', "    else if (m[2] === 'MANIFEST.sha256') out.push('MANIFEST.sha256: lists itself')\n", '', 'DEMOPC1: a manifest listing itself passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', '  if (!out.length && manifest !== manifestText(files)) out.push(', '  if (false) out.push(', 'DEMOPC1: a manifest other than its files make passes', DEMOP6],
+  ['scripts/demo-export/files.ts', '  const seen = pdf ? `${await pdfStrings(bytes)}\\n${bytes', '  const seen = pdf ? `${text}\\n${bytes', "DEMOPC1: a secret in a PDF's compressed metadata is exported", DEMOPF],
+  ['scripts/demo-export/files.ts', "    if ('software_version' in j) delete j.generated_at\n", '', 'DEMOPC1: (other way) the evidence JSON never compares equal', DEMOPF],
+  ['scripts/demo-export/files.ts', '    return { ...face, text }\n', '    return { ...face, text: [] }\n', 'DEMOPC1: an evidence PDF that changed compares equal', DEMOPF],
+  ['scripts/demo-export/files.ts', '  const face = { status, type: file.type, name: file.name }', '  const face = { type: file.type, name: file.name }', 'DEMOPC1: a file refused the second time compares equal', DEMOPF],
+  ['scripts/demo-export/clock.ts', "`${seconds < 0 ? '-' : '+'}${Math.abs(seconds)}`", "`${seconds < 0 ? '-' : ''}${Math.abs(seconds)}`", 'DEMOPC1: a forward clock move is written without its sign', DEMOP6],
+  ['scripts/demo-export/source.ts', "  'packs',\n", '', 'DEMOPC1: a changed rule pack is noted as clean', DEMOP6],
+  ['scripts/demo-export/source.ts', "    execFileSync('git', ['diff', '--quiet', commit, head, '--', ...BUILT_FROM], { stdio: 'ignore', cwd })", '    void head', 'DEMOPC1: a release names a commit with other app code', DEMOP6],
+  ['scripts/demo-export/source.ts', "    execFileSync('git', ['cat-file', '-e', `${commit}^{commit}`], { stdio: 'ignore', cwd })", '    void commit', 'DEMOPC1: a release names a commit this repository lacks, told as other code', DEMOP6],
+  ['src/web/static-api.ts', '      showDemoNote(DEMO_NOT_RECORDED)\n', '', 'DEMOPC1: an unrecorded page is left blank and silent', DEMOWEB9],
+  ['src/web/Invest.tsx', "(openStep() === 'pay' && signedStates.includes(p.status) ? 'pay' : 'none')", "('none')", "DEMOPC1: the payment step's link opens the closed card", DEMOWEB9],
+  ['src/web/App.tsx', '              (again: unknown) => (signedOut(again) ? setUser(null) : setOutError(e)),', '              () => setOutError(e),', 'DEMOPC1: a lost sign-out answer leaves the person shown signed in', SIGNOUTWEB],
+  // Codex P round 2 (docs/review/2026-11-26_demo_pack_codex_r2_triage.md)
+  ['e2e-demo/serve.ts', "  if (info.version !== (test ?? version) || (info.names_checked === false) !== Boolean(test))\n", '  if (false)\n', 'DEMOPC2: a test archive renamed as the release is served', DEMOP7],
+  ['e2e-demo/serve.ts', '  if (named !== name) throw new Error(', '  if (false) throw new Error(', 'DEMOPC2: a .sha256 for another file is taken', DEMOP7],
+  ['scripts/demo-pack.ts', 'export const testVersion = (version: string) => `${version}-test`', 'export const testVersion = (version: string) => version', "DEMOPC2: a test archive carries the release version", DEMOP6],
+  ['scripts/demo-pack.ts', '    if (stale) throw new Error(stale)\n', '', 'DEMOPC2: a build changed since it listed its files is packed', DEMOP6],
+  ['scripts/demo-pack.ts', '  mkdirSync(out, { recursive: true })\n', '  mkdirSync(out, { recursive: true })\n  rmSync(`${tar}.sha256`, { force: true })\n', "DEMOPC2: a failed run removes the earlier pair's hash", DEMOP6],
+  ['scripts/demo-pack.ts', "  built.set('MANIFEST.sha256', Buffer.from(manifestText(built)))\n", "  built.set('MANIFEST.sha256', Buffer.from(manifestText(built)))\n  writeFileSync(join(from, 'MANIFEST.sha256'), manifestText(built))\n", 'DEMOPC2: the pack writes into the build it packs', DEMOP6],
+  ['scripts/demo-export/source.ts', "  return git(cwd, 'ls-files', '--others', '--', ...BUILT_FROM) !== ''", '  return false', 'DEMOPC2: an ignored file in the app code is noted as clean', DEMOP6],
+  ['scripts/demo-export/source.ts', "  'scripts/demo-pack.ts',\n", '', 'DEMOPC2: a release names a commit with another pack writer', DEMOP6],
+  ['scripts/demo-export/source.ts', '  return diff.length ? `dist-demo/ is not what', '  return false ? `dist-demo/ is not what', 'DEMOPC2: a file missing from the build is not noticed', DEMOP6],
+  ['scripts/demo-export/tar.ts', "  if (len(path) <= 100) return ['', path]\n", "  return ['', path]\n", 'DEMOPC2: a long file name cannot be packed', DEMOP6],
+  ['scripts/demo-export/clock.ts', '  return db >= before - 1000 && db <= after + 1000', '  return Math.abs(db - before) < 2000', 'DEMOPC2: a slow docker call reads as a clock mismatch', DEMOP6],
+  ['scripts/demo-export/record.ts', "  s.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => Buffer.from(run.replace(/%/g, ''), 'hex').toString('utf8'))", '  s.replace(/%([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))', 'DEMOPC2: a %xx-encoded name outside ASCII passes', DEMOP6],
+  ['scripts/demo-export/pack.ts', '[A-Za-z]:\\\\{1,2}[Uu][Ss][Ee][Rr][Ss]\\\\{1,2}', '[A-Za-z]:\\\\{1,2}Users\\\\{1,2}', 'DEMOPC2: a lower-case Windows home folder passes', DEMOP6],
+  ['scripts/demo-export/files.ts', "  const evidence = /^evidence-pack\\.(json|pdf)$/.test(file.name ?? '')", '  const evidence = true', 'DEMOPC2: every JSON download loses its generated_at and until', DEMOPF],
+  ['scripts/demo-export/files.ts', "      if (s.key === 'versions') for", '      for', "DEMOPC2: a version item's until outside its section is left out", DEMOPF],
+  ['scripts/demo-export/files.ts', "text[made]!.replace(/^Made: \\S+, (software version .*)$/, 'Made: (when), $1')", "'Made:'", "DEMOPC2: the evidence PDF's software version is not compared", DEMOPF],
+  ['scripts/demo-export/files.ts', ' && VERSION_ITEM.test(text[i - 1]!.replace(', ' && /./.test(text[i - 1]!.replace(', 'DEMOPC2: any until line in the evidence PDF is left out', DEMOPF],
+  ['scripts/demo-export/files.ts', '    if (a.length !== b.length) return `${at} (length)`\n', '', 'DEMOPC2: a longer list reads as the same', DEMOPF],
+  ['scripts/demo-export/files.ts', '  return `${view} ${method} ${path}${names}${body}`', '  return key', "DEMOPC2: the export's report prints a token", DEMOPF],
+  ['src/web/static-browser.ts', ' || step !== shownStep) window.location.reload()', ') window.location.reload()', "DEMOPC2: the payment step's link in the same tab keeps the card closed", DEMOWEB9],
+  ['src/web/static-browser.ts', "window.addEventListener('popstate', moved)", '', 'DEMOPC2: the demo note follows the visitor to the next page', DEMOWEB9],
+  // Codex P round 3 (docs/review/2026-11-26_demo_pack_codex_r3_triage.md)
+  ['scripts/demo-export/lock.ts', ' process.once(signal, () => process.exit(128 + n))', ' void signal', 'DEMOPC3: Ctrl-C leaves the lock behind', DEMOP6],
+  ['scripts/demo-export/files.ts', '    const made = text.slice(0, first < 0 ? text.length : first).findLastIndex(', '    const made = text.findLastIndex(', "DEMOPC3: a Made: line in a kept text is left out", DEMOPF],
+  ['scripts/demo-export/files.ts', '      for (let i = versions + 1; i < text.length; i++)', '      for (let i = 1; i < text.length; i++)', "DEMOPC3: a version-like until in another section is left out", DEMOPF],
+  ['src/server/pdfText.ts', '        if (line === null || Math.abs(y - line) > 3) {', '        if (line !== null && Math.abs(y - line) > 3) {', "DEMOPC3: a page's first words placed by Td are dropped", DEMOP6],
+  // Codex P r6 simplification: pdf.js reads the page, the line grouping and the lock are ours
+  ['src/server/pdfText.ts', '        out[out.length - 1]!.text += run.str\n', '        out[out.length - 1]!.text += run.str\n        line = y\n', "DEMOPC6: a line is measured from its last run, not its first", DEMOP6],
+  ['src/server/pdfText.ts', '        out[out.length - 1]!.text += run.str\n', '        out[out.length - 1]!.text += run.str\n        out[out.length - 1]!.size = Math.round(Math.hypot(run.transform[2]!, run.transform[3]!) * 100) / 100\n', "DEMOPC6: a line takes its last run's size", DEMOP6],
+  ['src/server/pdfText.ts', 'Math.abs(y - line) > 3', 'Math.abs(y - line) > 5', 'DEMOPC6: two lines 4 points apart are read as one', DEMOP6],
+  ['scripts/demo-export/pack.ts', '  const parts = await pdfText(bytes)\n', '  const parts: string[] = []\n', "DEMOPC6: a PDF's drawn text is not scanned", DEMOP6],
+  ['scripts/demo-export/lock.ts', "writeFileSync(file, text, { flag: 'wx' })", 'writeFileSync(file, text)', 'DEMOPC6: a second step takes the lock another holds', DEMOP6],
+  ['scripts/demo-export/lock.ts', "      if (readFileSync(file, 'utf8') === text) rmSync(file, { force: true })", '      rmSync(file, { force: true })', "DEMOPC6: a step's release removes another step's lock", DEMOP6],
+  ['scripts/demo-export/lock.ts', "  process.once('exit', release)\n", '', 'DEMOPC6: a step that ends leaves its lock behind', DEMOP6],
+  ['scripts/demo-export/lock.ts', ".slice(0, 200) || 'a demo step'", ".slice(0, 200) || ''", 'DEMOPC6: an empty lock is refused without naming what holds it', DEMOP6],
+  ['scripts/demo-export/record.ts', ' || decoded.includes(s))', ')', "DEMOPC3: the export's secret check misses a %xx-encoded one", DEMOP],
+  ['scripts/demo-export/source.ts', "  'scripts/check-identity.mjs',\n", '', 'DEMOPC3: a release names a commit with another name-list loader', DEMOP6],
+  ['e2e-demo/serve.ts', '  if (codeDiffers(info.commit, cwd)) refuse(', "  if (codeDiffers('HEAD', cwd)) refuse(", 'DEMOPC3: the server serves a pack of other app code', DEMOP7],
+  ['scripts/demo-export/source.ts', "  if (sep !== '\\\\' && rel.includes('\\\\')) throw", '  if (false) throw', 'DEMOPC3: a file name with a backslash takes another file\'s path', DEMOP6],
+  ['scripts/demo-export/tar.ts', "  if (len(body) <= 100) return ['', body]\n", '', 'DEMOPC3: a 100-byte folder cannot be packed', DEMOP6],
+  ['scripts/demo-export/source.ts', "    execFileSync('git', ['diff', '--quiet', commit, '--', ...BUILT_FROM], { stdio: 'ignore', cwd })", '    void commit', 'DEMOPC3: a tracked change against the commit is not seen', DEMOP6],
+  ['src/web/static-browser.ts', '  shownStep = stepAt(window.location.hash)\n  moved()', '  moved()', "DEMOPC3: after the app's own links the payment step's link keeps the card closed", DEMOWEB9],
+  ['src/web/static-browser.ts', '  if (path !== shownPath) clearDemoNote()', '  clearDemoNote()', 'DEMOPC3: a query on the same blank page clears the demo note', DEMOWEB9],
+  // Codex P round 4 (docs/review/2026-11-26_demo_pack_codex_r4_triage.md)
+  ['scripts/demo-export/lock.ts', '[\'SIGTERM\', 15]', '[\'SIGTERM\', 2]', 'DEMOPC4: a kill ends with the code of Ctrl-C', DEMOP6],
+  ['scripts/demo-export/files.ts', "findLastIndex((l) => l.startsWith('Made: '))", "findIndex((l) => l.startsWith('Made: '))", "DEMOPC4: a Made: line in the deal's name is taken for the heading's", DEMOPF],
+  ['scripts/demo-export/source.ts', '  return { commit, clean: !staged && !codeDiffers(commit, cwd) }', '  return { commit, clean: !codeDiffers(commit, cwd) }', 'DEMOPC4: a change staged and undone in the file is noted clean', DEMOP6],
+  ['scripts/demo-export/tar.ts', '    const name = [path.slice(i + 1), body.slice(i + 1)].find(', '    const name = [path.slice(i + 1)].find(', 'DEMOPC4: a nested 100-byte folder cannot be packed', DEMOP6],
+  ['e2e-demo/serve.ts', '  if (codeDiffers(info.commit, cwd)) refuse(', '  if (codeDiffers(info.commit)) refuse(', 'DEMOPC4: the server asks another checkout than the one named', DEMOP7],
+  // Codex P r5 fixes
+  ['.gitignore', '\n/.demo.lock\n', '\n/.demo.lock*\n', 'DEMOPC5: a file that only starts with the lock name is ignored', DEMOP6],
+  ['e2e-demo/serve.ts', "readFileSync(join(cwd, 'package.json'), 'utf8')", "readFileSync('package.json', 'utf8')", "DEMOPC5: the server looks for the caller's version, not the checkout's", DEMOP7],
+  ['scripts/demo-export/files.ts', '  const title = (i: number) => lines[i]!.size === SECTION_TITLE_SIZE && SECTION_TITLES', '  const title = (i: number) => SECTION_TITLES', "DEMOPC5: a deal name's line that reads as a section title is taken for one", DEMOPF],
+  // not mutated, read instead (export and build glue; each needs a full export): the export's hour before each day boundary,
+  // the read-only POSTs and files compared in both passes, the database clock read after each move, the build removing its
+  // note first, demo-pack.ts --without-names
+  ['src/web/static-browser.ts', 'a?.view !== loaded || ', '', 'DEMOP7: back to another view keeps the last view signed in', DEMOWEB11],
+  ['src/web/static-browser.ts', " || new URLSearchParams(a.search).has('token')", '', 'DEMOP7: the payment check link opens without its token', DEMOWEB11],
+  ['src/server/demoSeed.ts', "      { text: SAMPLE_MARK, bold: true, boxed: true, size: 14 },\n", '', 'DEMO3: a generated file without the sample mark', DEMO3],
+  ['src/server/demoSeed.ts', "    if (d.stop === 'draft') {", "    if (false) {", 'DEMO3: the draft deal is sent for review too', DEMO3],
+  ['src/server/demoSeed.ts', "  app.post('/api/demo-deal', { config: { gate: 'canAdministerInstance' as const } }", "  app.post('/api/demo-deal', { config: { gate: 'active' as const } }", 'DEMO3b: anyone signed in adds the demo deal', DEMO3],
+  ['src/server/demoSeed.ts', '  ...a.investors.map((x) => ({', '  ...[...a.investors, a.reviewer].map((x) => ({', "DEMO3b: the run's reviewer is shown with the sign-ins", DEMO3],
+  ['src/server/demoSeed.ts', "  if (mode !== 'sandbox') return null\n  const r = await c.query<{ state:", "  const r = await c.query<{ state:", 'DEMO3b: the real mode still shows the button', DEMO3],
+  ['src/server/demoSeed.ts', "  if (o.flag !== '1') return null\n", '', 'DEMO3c: the start-up seed runs without the flag', DEMO3],
+  ['src/server/demoSeed.ts', '    await rm(o.file, { force: true })\n', '', "DEMO3c: an earlier run's sign-in file is kept, readable by others", DEMO3],
+  ['src/server/demoSeed.ts', "{ mode: 0o600, flag: 'wx' }", "{ mode: 0o644, flag: 'wx' }", 'DEMO3c: the sign-in file is readable by others', DEMO3],
+  ['src/server/demoSeed.ts', "    if (e instanceof Refused) return `BULMA_DEMO_DEAL is ignored: ${e.message}`\n", '', 'DEMO3c: a refused start-up seed logs as a failure', DEMO3],
+  ['src/lib/invite.ts', "  if (!f.sameDemoSide) return { ok: false, reason: 'demo_apart' }\n", '', 'DEMO5: an invitation is accepted across the demo line', DEMO5],
+  ['src/lib/demo.ts', '(a: string | null, b: string | null): boolean => a === b', '(a: string | null, b: string | null): boolean => a === b || a === null', 'DEMO5: an ordinary record meets a demo one', DEMO5],
+  ['src/server/d3Invest.ts', 'sameDemoSide: sameDemoSide(deal.demo_run, await demoRunOfUser(c, who.id)),', 'sameDemoSide: true,', 'DEMO5: the invitation route does not look at the demo line', DEMO5],
+  ['src/server/d3Invest.ts', '      if (!sameDemoSide(deal.demo_run, await demoRunOfUser(c, who.id))) throw new Refused(DEMO_APART)\n', '', 'DEMO5: a commitment across the demo line is not refused in words', DEMO5],
+  ['src/server/d2Syndicate.ts', "      if (!sameDemoSide(syndicateRun, await demoRunOfUser(c, req.user!.id))) throw new Refused(DEMO_APART)\n", '', 'DEMO5: a syndicate link across the demo line is not refused in words', DEMO5],
+  ['src/server/d2Investee.ts', '\n       AND demo_run IS NOT DISTINCT FROM (SELECT demo_run FROM deal WHERE id = $4) LIMIT 1`', ' AND $4::uuid IS NOT NULL LIMIT 1`', 'DEMO5: a company check is reused across the demo line', DEMO5],
+  ['src/server/d2Investee.ts', 'VALUES ($1, $2, $3, $4, (SELECT demo_run FROM deal WHERE id = $5))', 'VALUES ($1, $2, $3, $4, (SELECT NULL::uuid WHERE $5::uuid IS NOT NULL))', "DEMO5: a demo deal's company record is ordinary", DEMO5],
+  ['src/server/d4Import.ts', '      if (!sameDemoSide(deal.demo_run, row.demo_run)) throw new Refused(DEMO_MONEY_APART)\n', '', 'DEMO5: deciding a statement line does not look at the demo line again', DEMO5],
+  ['src/server/d4Unallocated.ts', '    if (!sameDemoSide(p.demo_run, fromRun)) throw new Refused(DEMO_MONEY_APART)\n', '', 'DEMO5: money is allocated across the demo line', DEMO5],
+  ['src/store/migrations/006_demo.sql', '    NEW.demo_run := (SELECT demo_run FROM user_account WHERE id = NEW.lead_user);', '    NEW.demo_run := NULL;', "DEMO5: a demo lead's deal is ordinary", DEMO5],
+  ['src/store/migrations/006_demo.sql', '    NEW.demo_run := (SELECT demo_run FROM user_account WHERE id = NEW.created_by);', '    NEW.demo_run := NULL;', "DEMO5: a demo lead's syndicate is ordinary", DEMO5],
+  ['src/store/migrations/006_demo.sql', '  IF a IS DISTINCT FROM b THEN', '  IF false THEN', 'DEMO5: the database joins records across the demo line', DEMO5],
+  ['src/lib/demo.ts', '  if (sides.length > 1) return null\n', '', 'DEMO5: a statement with both sides is taken', DEMO5],
+  ['src/lib/demo.ts', '  return { side: sides[0] ?? null }', '  return { side: null }', 'DEMO5: a demo statement is ordinary', DEMO5],
+  ['src/server/d4Import.ts', '      if (!side) throw new Refused(DEMO_MIXED_STATEMENT)\n', '', 'DEMO5: the import route takes a statement with both sides', DEMO5],
+  ['src/server/d4Import.ts', 'csv: b.csv, demoRun: side.side }', 'csv: b.csv, demoRun: null }', "DEMO5: a statement's side is not kept", DEMO5],
+  ['src/server/d4Import.ts', '        // R-DEMO-05: the money keeps its statement\'s side\n        row.demo_run,', '        null,', 'DEMO5: demo money from a statement becomes ordinary unallocated money', DEMO5],
+  ['src/server/d4Unallocated.ts', 'await target(c, who, p.to, row.currency, row.demo_run)', 'await target(c, who, p.to, row.currency, null)', "DEMO5: unallocated money loses its side when allocated", DEMO5],
+  ['src/server/d4Unallocated.ts', 'id, who.id, srcRun],', 'id, who.id, null],', 'DEMO5: demo money moved to the unallocated list becomes ordinary', DEMO5],
+  ['src/server/d4Unallocated.ts', 'candidates.filter((c) => sameDemoSide(runOf.get(c.participation) ?? null, r.demo_run)),', 'candidates,', 'DEMO5: suggestions cross the demo line', DEMO5],
+  ['src/store/migrations/006_demo.sql', "  IF NEW.participation_id IS NOT NULL AND (SELECT demo_run FROM goten_import", "  IF false AND (SELECT demo_run FROM goten_import", 'DEMO5: the database stages a line across the demo line', DEMO5],
+  ['src/server/requests.ts', '    return { demoFiles: await retireDemoAtSwitch(c, x.k) }', '    return {}', 'DEMO6: the switch leaves the demo deal in place', DEMO6],
+  ['src/server/demo.ts', "  if (live.state !== 'added') throw", "  if (live.state === 'added') return []\n  if (live.state !== 'added') throw", 'DEMO6: an added demo run survives the switch', DEMO6],
+  ['src/store/migrations/006_demo.sql', "AS RESTRICTIVE TO bulma_app USING (NOT %s) WITH CHECK (NOT %s)', t.tbl, t.hidden, t.hidden)", "AS RESTRICTIVE TO bulma_app USING (true) WITH CHECK (true)', t.tbl)", 'DEMO6: a retired run stays visible to the app', DEMO6],
+  ['src/store/migrations/006_demo.sql', "    ('participation', 'demo_retired_deal(deal_id)'), ", '    ', "DEMO6: a retired deal's participations stay visible", DEMO6],
+  ['src/store/migrations/006_demo.sql', "    ('deal', 'demo_retired(demo_run)'), ", '    ', 'DEMO6: a retired deal stays visible', DEMO6],
+  ['src/store/migrations/006_demo.sql', "('legal_entity', 'demo_retired_user(owner_user)'), ", '', "DEMO6: a retired account's entities stay visible", DEMO6],
+  ['src/store/migrations/006_demo.sql', 'CREATE FUNCTION demo_boundary_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER', 'CREATE FUNCTION demo_boundary_guard() RETURNS trigger LANGUAGE plpgsql', 'DEMO6: the boundary guard reads a hidden row as none', DEMO6],
+  ['src/server/demo.ts', '  await c.query(`UPDATE investee_link SET revoked_at = now()', '  if (false) await c.query(`UPDATE investee_link SET revoked_at = now()', "DEMO6: the demo company's link still opens", DEMO6],
+  ['src/server/demo.ts', '  await c.query(`UPDATE targeted_invite SET revoked_at = now()', '  if (false) await c.query(`UPDATE targeted_invite SET revoked_at = now()', "DEMO6: the demo deal's targeted invitation still opens", DEMO6],
+  ['src/server/demo.ts', "  await c.query('UPDATE member_invite SET revoked_at = now()", "  if (false) await c.query('UPDATE member_invite SET revoked_at = now()", "DEMO6: the demo syndicate's invitation still opens", DEMO6],
+  ['src/server/demo.ts', "  await c.query(\n    'UPDATE entity_party SET verify_token_hmac = NULL", "  if (false) await c.query(\n    'UPDATE entity_party SET verify_token_hmac = NULL", "DEMO6: a demo party's confirmation link still works", DEMO6],
+  ['src/server/demo.ts', "  const keys = (await c.query<{ key: string }>('SELECT demo_remove_files($1) AS key', [runId])).rows.map((r) => r.key)", '  const keys: string[] = []', "DEMO6: a retired run's files stay", DEMO6],
+  ['src/store/migrations/006_demo.sql', '    INSERT INTO file_deletion (storage_key) SELECT storage_key FROM gone ON CONFLICT DO NOTHING', '    SELECT 1', "DEMO6: a retired run's stored bytes are never queued for deletion", DEMO6],
+  ['src/server/requests.ts', '  if (demoFiles.length) await x.dropFiles?.(demoFiles).catch(() => {})', '', "DEMO6: the sandbox keeps the demo files' bytes in memory", DEMO6],
+  ['src/server/app.ts', 'FROM user_account u WHERE NOT demo_retired_user(u.id) ORDER BY', 'FROM user_account u ORDER BY', 'DEMO6: retired demo accounts stay on the users page', DEMO6],
+  ['src/server/d1.ts', "    if ((await d.db.query<{ gone: boolean }>('SELECT demo_retired_user($1) AS gone', [id])).rows[0]!.gone) return reply.code(404).send({ error: 'No such person.' })\n", '', "DEMO6: a retired demo account's evidence opens by id", DEMO6],
+  ['src/server/requests.ts', 'FROM user_account WHERE id = $1 AND NOT demo_retired_user(id)', 'FROM user_account WHERE id = $1', 'DEMO6: a role request can be opened about a retired demo account', DEMO6],
+  ['src/server/demo.ts', "  await appendAudit(c, k, { actor: 'system', action: 'demo.data_cleared'", "  if (false) await appendAudit(c, k, { actor: 'system', action: 'demo.data_cleared'", 'DEMO6: no "demo data cleared" in the audit', DEMO6],
+  ['src/server/requests.ts', "  if ((await c.query('SELECT 1 FROM regime_pack WHERE id = $1 AND demo_only', [packId])).rowCount) return new Refused(DEMO_PACK_NOT_CURRENT)\n", '', 'DEMO7: a demo pack can be asked for and approved as the current pack', DEMO7],
+  ['src/store/migrations/006_demo.sql', '    IF EXISTS (SELECT 1 FROM regime_pack WHERE id = NEW.active_pack_id AND demo_only) THEN', '    IF false THEN', 'DEMO7: the database lets a demo pack become the current pack', DEMO7],
+  ['src/store/migrations/006_demo.sql', "    IF NEW.demo_run IS NULL OR (SELECT mode", "    IF (SELECT mode", 'DEMO7: the database binds a demo pack to an ordinary deal', DEMO7],
+  ['src/store/migrations/006_demo.sql', "    IF NEW.demo_run IS NULL OR (SELECT mode FROM instance_profile WHERE id = 1) <> 'sandbox' THEN", '    IF NEW.demo_run IS NULL THEN', 'DEMO7: the database binds a demo pack in the real mode', DEMO7],
+  ['src/server/d2.ts', '        demoPack?.id ?? inst.active_pack_id,', '        inst.active_pack_id,', 'DEMO7: the demo deal is bound to the current pack', DEMO7],
+  ['src/server/d2.ts', "...(demoPack ? { detail: { demo_pack: demoPack.v } } : {}) })", '})', 'DEMO7: the launch audit does not name the demo pack', DEMO7],
+  ['src/server/d1.ts', '      const { id, pack } = await eligibilityPack(c, who.id)', '      const { id, pack } = await activePack(c)', "DEMO7: demo investors confirm the current pack's warning", DEMO7],
+  ['src/server/demoSeed.ts', '      await installDemoPack(db, k, run, o.by)\n', '', 'DEMO7: the seed installs no demo pack', DEMO7],
+  ['src/server/demoSeed.ts', '    let id = stored.find((r) => r.content_sha256 === packSha256(demo(r.version)))?.id', '    let id: string | undefined', 'DEMO7: every run adds another demo pack version', DEMO7],
+  ['src/lib/demo.ts', "required_bold: [], is_placeholder: true }", "required_bold: [], is_placeholder: false }", 'DEMO7: the demo texts are no longer marked as placeholders', DEMO7],
+  // self-test review 2026-11-24 (rules G2 step 0): the fixes of the fresh-context review
+  ['src/server/demo.ts', '  await c.query(`DELETE FROM pending_invite WHERE invite_link IN (SELECT id FROM invite_link WHERE deal_id IN ${deals})`, [runId])\n', '', 'DEMOR: a link opened before the switch stays pending after it', DEMO6],
+  ['src/server/d3Invest.ts', '        if (!linkDeal) {\n          await done()\n          continue\n        }\n', '', 'DEMOR: accepting with a hidden demo link pending is a server error', DEMO6],
+  ['src/store/migrations/006_demo.sql', "    ('goten_ledger', 'demo_retired_deal(deal_id)'), ", '    ', "DEMOR: a retired demo deal's ledgers stay visible", DEMO6],
+  ['src/store/migrations/006_demo.sql', "    ('member_invite', 'demo_retired_syndicate(syndicate_id)'), ('syndicate_member', 'demo_retired_syndicate(syndicate_id)'),", "    ('member_invite', 'demo_retired_syndicate(syndicate_id)'),", "DEMOR: a retired demo syndicate's members stay visible", DEMO6],
+  ['src/store/migrations/006_demo.sql', "  RAISE EXCEPTION 'the demo run a record belongs to cannot change' USING ERRCODE = 'P0001';", '  RETURN NEW;', 'DEMOR: the run a record belongs to can be changed', DEMO6],
+  ['src/store/migrations/006_demo.sql', 'CREATE TRIGGER deal_demo_run_pack BEFORE INSERT', 'CREATE TRIGGER deal_demo_pack BEFORE INSERT', 'DEMOR: an inserted deal is checked against the run its caller named', DEMO7],
+  ['src/server/demo.ts', '\n    await recoverDemoRun(db, k, o.drop).catch(() => null)\n', '\n', 'DEMOR: a run whose last commit failed keeps its mark until a restart', DEMO],
+  ['src/server/demoSeed.ts', '  if (!cfg.enabled_structures.includes(DEMO_STRUCTURE))', '  if (false)', 'DEMOR: the seed starts without the structure it needs', DEMO3],
+  ['src/server/demoSeed.ts', '  if (BigInt(cfg.min_commitment_floor_minor) > smallest)', '  if (BigInt(cfg.min_commitment_floor_minor) >= smallest)', 'DEMOR: a floor equal to the smallest commitment refused', DEMO3],
+  ['src/server/demoSeed.ts', '  if (BigInt(cfg.min_commitment_floor_minor) > smallest)', '  if (false)', 'DEMOR: the seed starts with a floor above a commitment', DEMO3],
+  ['src/server/demoSeed.ts', '  if (cfg.content_approval_in_sandbox)', '  if (false)', 'DEMOR: the seed starts when launch needs a promotion approval', DEMO3],
+  ['src/server/demoSeed.ts', '  if (cfg.link_fee_max_bps < demoScenario.link.fee.bps)', '  if (cfg.link_fee_max_bps <= demoScenario.link.fee.bps)', 'DEMOR: a cap equal to the demo link fee refused', DEMO3],
+  ['src/server/demoSeed.ts', '  if (cfg.link_fee_max_bps < demoScenario.link.fee.bps)', '  if (false)', 'DEMOR: the seed starts with a lead-fee cap below its link', DEMO3],
+  ['src/server/demoSeed.ts', "    registration_number: 'SAMPLE-00000000',\n", '', 'DEMOR: the seed leaves a required registration number empty', DEMO3],
+  // Codex round 1 (2026-11-24): the fixes of its findings
+  ['src/server/requests.ts', "mfa_enabled_at FROM user_account WHERE id = $1 AND NOT demo_retired_user(id)'", "mfa_enabled_at FROM user_account WHERE id = $1'", 'DEMOC1: an admin action can name a retired demo account', DEMO6],
+  ['src/server/requests.ts', "    await liveUser(c, userId)\n    if (row.mode === 'real' && !hold) {", "    if (row.mode === 'real' && !hold) {", 'DEMOC1: a retention hold can name a retired demo account', DEMO6],
+  ['src/server/requests.ts', '    await liveUser(c, userId)\n    const staff = await currentStaff(c)', '    const staff = await currentStaff(c)', 'DEMOC1: disabling can name a retired demo account', DEMO6],
+  ['src/server/demo.ts', '      await recoverDemoRun(db, k, o.drop).catch(() => null)\n', '', 'DEMOC1: a failed run whose retiring failed stays live until a restart', DEMO],
+  ['src/server/demo.ts', '    if (done) await drop?.(done.keys).catch(() => {})\n', '', 'DEMOC1: recovery inside a running server leaves file copies in memory', DEMO],
+  ['src/server/demo.ts', '\n    await recoverDemoRun(db, k, o.drop).catch(() => null)\n', '\n    await recoverDemoRun(db, k).catch(() => null)\n', 'DEMOC1: a seed whose closing failed leaves its file copies in memory', DEMO],
+  ['src/store/migrations/006_demo.sql', "  IF (OLD.state = 'retired' AND", '  IF (false AND', 'DEMOC1: a retired run can come back', DEMO],
+  ['src/store/migrations/006_demo.sql', "     OR (OLD.state = 'added' AND NEW.state = 'adding') THEN", '     OR false THEN', 'DEMOC1: an added run can go back to adding', DEMO],
+  ['src/store/migrations/006_demo.sql', '  IF NEW.demo_run IS NOT NULL AND NOT EXISTS', '  IF false AND NOT EXISTS', 'DEMOC1: a demo account can be made for a run no longer being added', DEMO],
+  ['src/server/demoSeed.ts', '      const income = { yes: true, amount_minor: BigInt(pack.thresholds.hnw_income_minor).toString() }', "      const income = { yes: true, amount_minor: '10000000' }", "DEMOC1: the seed ignores the pack's income threshold", DEMO3],
+  ['src/server/demoSeed.ts', '  if (unknown.length) out.push', '  if (false) out.push', 'DEMOC1: the seed starts with a pack step it cannot walk', DEMO3],
+  ['src/server/demoSeed.ts', "    } else if (kind === 'assessment') {", "    } else if (kind === 'assessment' || kind === 'warning_block') {", 'DEMOC1: the seed does not follow the pack steps', DEMO3],
+  ['src/server/d4Import.ts', '      const side = statementSide([...matched.map((m) => runOf.get(m)!), ...rememberedSides.map((r) => r.demo_run)])', '      const side = statementSide([...matched.map((m) => runOf.get(m)!)])', 'DEMOC1: a statement uploaded again loses the side its recorded lines had', DEMO5],
+  // Codex round 2 (2026-11-24): the fixes of its findings
+  ['src/server/d4Import.ts', '`SELECT g.demo_run, g.id IS NULL AS hidden FROM imported_line l LEFT JOIN goten_import g ON g.id = l.import_id\n               WHERE l.scope = $1 AND l.key_sha256 = ANY($2::text[])`', '`SELECT g.demo_run, g.id IS NULL AS hidden FROM imported_line l LEFT JOIN goten_import g ON g.id = l.import_id\n               WHERE l.scope = $1 AND l.key_sha256 = ANY($2::text[]) AND (l.receipt_id IS NOT NULL OR l.unallocated_id IS NOT NULL)`', 'DEMOC2: a statement uploaded again loses the side its skipped lines had', DEMO5],
+  ['src/server/d4Import.ts', '      if (rememberedSides.some((r) => r.hidden)) throw new Refused(DEMO_RETIRED_STATEMENT)\n', '', "DEMOC2: a retired run's statement lines are taken as ordinary", DEMO5],
+  ['src/server/requests.ts', ": u.retired ? RETIRED_DEMO_ACCOUNT :", ': false ? RETIRED_DEMO_ACCOUNT :', 'DEMOC2: a request asked before the switch shows the retired demo account', DEMO6],
+  ['src/server/requests.ts', '  await recoverDemoRun(x.db, x.k, x.dropFiles)\n  const input = profileSchema.parse(raw)', '  const input = profileSchema.parse(raw)', 'DEMOC2: a stuck run is not retired at the switch request', DEMO],
+  ['src/server/requests.ts', "  if (decision === 'approve') await recoverDemoRun(x.db, x.k, x.dropFiles)\n", '', 'DEMOC2: a stuck run is not retired at an approval', DEMO],
+  ['src/server/demoSeed.ts', '  await recoverDemoRun(db, k, drop)\n  const refusals', '  const refusals', 'DEMOC2: a stuck run is not retired at the next press', DEMO],
+  ['src/server/demoSeed.ts', '.toString().length > STATEMENT_DIGITS)', '.toString().length > 18)', 'DEMOC2: a threshold a statement cannot take is found half-way', DEMO3],
+  ['src/server/demoSeed.ts', '      const income = { yes: true, amount_minor: BigInt(pack.thresholds.hnw_income_minor).toString() }', '      const income = { yes: true, amount_minor: pack.thresholds.hnw_income_minor }', 'DEMOC2: a zero-padded threshold breaks the seed', DEMO3],
   // group B T-02, T-11: the route-table access matrix (TC-AUTHZ-01, TC-AUTHZ-02)
   ['src/server/d3Invest.ts', '`SELECT * FROM participation WHERE id = $1 AND user_id = $2 AND created_at >= ${REAL_SINCE} ${lock', '`SELECT * FROM participation WHERE id = $1 AND $2::uuid IS NOT NULL AND created_at >= ${REAL_SINCE} ${lock', 'T-02: another person reaches a participation by its id', AUTHZMATRIX],
   ['src/server/d3Lead.ts', 'if (!allowed) throw new Refused(NOT_FOUND)', 'if (false) throw new Refused(NOT_FOUND)', 'T-02: the lead of another deal runs this deal’s lead routes', AUTHZMATRIX],
@@ -1837,8 +2144,8 @@ function sinceSelection(ref) {
     }
     return touched.get(file)
   }
-  const HARNESS = { vitest: ['src/store/testdb.ts', 'vitest.config.ts'], playwright: ['e2e/serve.ts', 'playwright.config.ts'] }
-  const harnessChanged = { vitest: HARNESS.vitest.some(lostLines), playwright: HARNESS.playwright.some(lostLines) }
+  const HARNESS = { vitest: ['src/store/testdb.ts', 'vitest.config.ts'], playwright: ['e2e/serve.ts', 'playwright.config.ts'], demo: ['e2e-demo/serve.ts', 'playwright.demo.config.ts'] }
+  const harnessChanged = { vitest: HARNESS.vitest.some(lostLines), playwright: HARNESS.playwright.some(lostLines), demo: HARNESS.demo.some(lostLines) }
   const out = []
   for (const m of MUTANTS) {
     const [file, from, , , cmd] = m
@@ -1851,9 +2158,9 @@ function sinceSelection(ref) {
       const last = first + from.split('\n').length - 1
       if (linesOf(file).some(([a, b]) => a <= last + CONTEXT && b >= first - CONTEXT)) why.push('code changed')
     } else why.push('missing')
-    const tests = cmd.match(/(?:src|e2e|scripts)\/[\w./-]+\.(?:test|spec)\.ts/g) ?? []
+    const tests = cmd.match(/(?:src|e2e-demo|e2e|scripts)\/[\w./-]+\.(?:test|spec)\.ts/g) ?? []
     if (tests.some((f) => picks(cmd, touchedIn(f), readFileSync(f, 'utf8')))) why.push('tests changed')
-    if (harnessChanged[cmd.includes('playwright') ? 'playwright' : 'vitest']) why.push('harness changed')
+    if (harnessChanged[cmd.includes('playwright.demo.config') ? 'demo' : cmd.includes('playwright') ? 'playwright' : 'vitest']) why.push('harness changed')
     if (why.length) out.push(m)
   }
   return out

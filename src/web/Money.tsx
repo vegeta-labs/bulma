@@ -7,11 +7,11 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { money } from '../lib/dealSheet.ts'
 import { typedAmountToDraft } from '../lib/pounds.ts'
 import { api } from './api.ts'
+import { here, today } from './browser.ts'
 import { Link, useData } from './DealShared.tsx'
 import { Problem, useRun } from './Investor.tsx'
 
 const amount = (m: string | null, c: string) => (m === null ? 'none' : money(BigInt(m), c))
-const today = () => new Date().toISOString().slice(0, 10)
 /** What was typed as an amount, in minor units for the server; text that is not an amount goes as typed and is refused there. */
 const typed = (s: string) => typedAmountToDraft(s) ?? ''
 const asTyped = (m: string) => {
@@ -327,6 +327,8 @@ interface Person {
   deal_code: string
   reference: string
   investor: string
+  /** On a demo deal (R-DEMO-05). */
+  demo: boolean
 }
 interface Unallocated {
   id: string
@@ -341,13 +343,15 @@ interface Unallocated {
   days_open: number
   return_requested_by: string | null
   return_basis: string | null
+  /** Money from the demo side: it goes only to people on demo deals (R-DEMO-05). */
+  demo: boolean
   suggestions: Array<Omit<Person, 'currency' | 'owed_minor'> & { by_amount: boolean; by_name: boolean }>
 }
 
 const personWords = (p: { investor: string; deal_code: string; reference: string }) => `${p.investor} · ${p.deal_code} · ${p.reference}`
 
 function Allocate({ row, people, onDone }: { row: Unallocated; people: Person[]; onDone: () => Promise<void> }) {
-  const mine = people.filter((p) => p.currency === row.currency)
+  const mine = people.filter((p) => p.currency === row.currency && p.demo === row.demo)
   const [parts, setParts] = useState([{ to: '', amount: asTyped(row.amount_minor) }])
   const { error, run } = useRun()
   const set = (i: number, k: 'to' | 'amount', v: string) => setParts(parts.map((p, j) => (j === i ? { ...p, [k]: v } : p)))
@@ -416,6 +420,7 @@ function UnallocatedItem({ row, people, me, onDone }: { row: Unallocated; people
         <span className="pill">received {row.received_on}</span>
         <span className="pill">{row.days_open === 1 ? 'open 1 day' : `open ${row.days_open} days`}</span>
         {row.return_requested_by && <span className="pill flag">return asked for</span>}
+        {row.demo && <span className="pill">demo</span>}
       </div>
       <dl className="details">
         <div>
@@ -1083,7 +1088,7 @@ export function PaymentChecks({ version, onChange }: { version: number; onChange
 
 /** The import a link from the to-do list points at, read from the address and kept in step with it. */
 function useImportParam() {
-  const read = () => new URLSearchParams(window.location.search).get('import')
+  const read = () => new URLSearchParams(here().search).get('import')
   const [v, setV] = useState(read)
   useEffect(() => {
     const on = () => setV(read())

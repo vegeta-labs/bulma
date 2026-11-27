@@ -19,6 +19,8 @@ export interface SwitchFacts {
   packFormatErrors: readonly string[]
   yourMoneyFilled: boolean
   staff: readonly Staff[]
+  /** R-DEMO-04: a demo deal is being added; its run must finish or be cleared first. */
+  demoAdding: boolean
 }
 
 export interface Blocker {
@@ -60,6 +62,7 @@ export function switchBlockers(f: SwitchFacts): Blocker[] {
   if (!f.yourMoneyFilled) out.push({ code: 'your_money', message: 'Fill in the "your money" panel.' })
   if (!f.staff.some((s) => has(s, 'approver'))) out.push({ code: 'approver', message: 'Add at least one promotion approver.' })
   if (!hasDistinctAdminsAndReviewer(f.staff)) out.push({ code: 'separation', message: 'The real mode needs two admins and a reviewer, three different people.' })
+  if (f.demoAdding) out.push({ code: 'demo_adding', message: 'A demo deal is being added. Try again when it has finished.' })
   return out
 }
 

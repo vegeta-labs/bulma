@@ -263,6 +263,7 @@ describe('R-LNK links', () => {
     person: { activeInvitation: false, endedBefore: false },
     targeted: null,
     verifiedEmail: 'a@example.test',
+    sameDemoSide: true,
     ...over,
   })
   const t = (over: Partial<NonNullable<AcceptFacts['targeted']>> = {}) => ({
