@@ -29,12 +29,18 @@ const page_ = (n: string) => {
   return p
 }
 
+// The browser's own warning about the site's header, not the page: a browser that lacks a feature the header turns off
+// (Chromium on Linux has no Web Bluetooth without a flag) says so once per page. Only features the header names.
+const HEADER_FEATURES = SITE_HEADERS['permissions-policy']!.split(', ').map((p) => p.split('=')[0]!)
+const headerWarning = (type: string, text: string) =>
+  type === 'warning' && HEADER_FEATURES.some((f) => text === `Error with Permissions-Policy header: Unrecognized feature: '${f}'.`)
+
 /** What a page does that the site would not allow or a visitor should not see: requests, console errors, CSP violations. */
 function watch(page: Page) {
   const seen = { requests: [] as Array<{ url: string; type: string; method: string }>, problems: [] as string[] }
   page.on('request', (r) => seen.requests.push({ url: r.url(), type: r.resourceType(), method: r.method() }))
   page.on('console', (m) => {
-    if (m.type() === 'error' || m.type() === 'warning') seen.problems.push(`${m.type()}: ${m.text()}`)
+    if ((m.type() === 'error' || m.type() === 'warning') && !headerWarning(m.type(), m.text())) seen.problems.push(`${m.type()}: ${m.text()}`)
   })
   page.on('pageerror', (e) => seen.problems.push(`page error: ${e.message}`))
   // added by the browser tool, not the page, so the site's CSP does not apply to it
